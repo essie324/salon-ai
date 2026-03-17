@@ -5,14 +5,17 @@ import { getCurrentUserWithProfile } from "./auth";
 const ROLE_COOKIE = "salon_role";
 
 export async function getActiveRole(): Promise<AppRole> {
-  // Primary source: Supabase auth + profiles table
+  // Primary source of truth:
+  // - Supabase auth session + `public.profiles.role`
+  // - This must always win when the user is authenticated.
   const current = await getCurrentUserWithProfile();
   if (current) {
     return current.role;
   }
 
-  // Compatibility fallback: legacy cookie-based role,
-  // kept for local development and non-auth flows.
+  // Dev/compatibility fallback ONLY:
+  // - Used for local development and non-auth flows.
+  // - Must never override an authenticated user's profile role.
   const store = await cookies();
   return normalizeRole(store.get(ROLE_COOKIE)?.value);
 }

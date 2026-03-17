@@ -41,7 +41,15 @@ export default function Topbar({
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2">{rightSlot}</div>
+        <div className="flex items-center gap-2">
+          {rightSlot}
+          <Link
+            href="/auth/signout"
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Sign out
+          </Link>
+        </div>
       </div>
     </header>
   );

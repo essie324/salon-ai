@@ -1,6 +1,11 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
+import {
+  hasStylistConflict,
+  CONFLICT_MESSAGE,
+} from "../../lib/appointmentConflicts";
+import { validateStylistAvailability } from "../../lib/stylistAvailability";
 
 async function createAppointment(formData: FormData) {
   "use server";
@@ -17,13 +22,6 @@ async function createAppointment(formData: FormData) {
     return;
   }
 
-  // Compute start_at from the selected date and time.
-  // The browser sends local date/time; we store as ISO. Adjust later if you
-  // introduce explicit salon timezones.
-  const startAtLocal = new Date(`${appointment_date}T${appointment_time}`);
-  const start_at = startAtLocal.toISOString();
-
-  // Look up service duration to compute end_at. If not available, default to 60 minutes.
   const { data: serviceRow } = await supabase
     .from("services")
     .select("duration_minutes")
@@ -31,9 +29,38 @@ async function createAppointment(formData: FormData) {
     .maybeSingle();
 
   const durationMinutes =
-    serviceRow && (serviceRow as any).duration_minutes != null
-      ? Number((serviceRow as any).duration_minutes)
+    serviceRow != null && (serviceRow as { duration_minutes?: number }).duration_minutes != null
+      ? Number((serviceRow as { duration_minutes: number }).duration_minutes)
       : 60;
+
+  const conflict = await hasStylistConflict(supabase, {
+    stylist_id,
+    appointment_date,
+    appointment_time,
+    durationMinutes,
+  });
+
+  if (conflict) {
+    const params = new URLSearchParams({ error: "conflict" });
+    if (client_id) params.set("clientId", client_id);
+    redirect(`/appointments/new?${params.toString()}`);
+  }
+
+  const availability = await validateStylistAvailability(supabase, {
+    stylist_id,
+    appointment_date,
+    appointment_time,
+    durationMinutes,
+  });
+
+  if (!availability.valid) {
+    const params = new URLSearchParams({ error: "availability", message: availability.message });
+    if (client_id) params.set("clientId", client_id);
+    redirect(`/appointments/new?${params.toString()}`);
+  }
+
+  const startAtLocal = new Date(`${appointment_date}T${appointment_time}`);
+  const start_at = startAtLocal.toISOString();
 
   const endAtLocal = new Date(startAtLocal.getTime() + durationMinutes * 60 * 1000);
   const end_at = endAtLocal.toISOString();
@@ -59,7 +86,17 @@ async function createAppointment(formData: FormData) {
   redirect("/appointments");
 }
 
-export default async function NewAppointmentPage() {
+export default async function NewAppointmentPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ clientId?: string; error?: string; message?: string }>;
+}) {
+  const resolved = await searchParams;
+  const clientIdParam = resolved?.clientId?.trim() ?? "";
+  const showConflictError = resolved?.error === "conflict";
+  const showAvailabilityError = resolved?.error === "availability";
+  const availabilityMessage = resolved?.message ?? "This time is not available for the selected stylist.";
+
   const [
     { data: clients },
     { data: services },
@@ -79,6 +116,16 @@ export default async function NewAppointmentPage() {
       .eq("is_active", true)
       .order("first_name", { ascending: true }),
   ]);
+
+  const clientList = clients ?? [];
+  const prefillClient =
+    clientIdParam && clientList.some((c) => c.id === clientIdParam)
+      ? clientList.find((c) => c.id === clientIdParam) ?? null
+      : null;
+  const prefillClientId = prefillClient?.id ?? "";
+  const prefillClientName =
+    prefillClient &&
+    `${prefillClient.first_name ?? ""} ${prefillClient.last_name ?? ""}`.trim();
 
   return (
     <main
@@ -119,6 +166,54 @@ export default async function NewAppointmentPage() {
         </Link>
       </div>
 
+      {prefillClientName ? (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: "12px 16px",
+            borderRadius: 12,
+            background: "#eef6ff",
+            color: "#0b57d0",
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          Booking for {prefillClientName}
+        </div>
+      ) : null}
+
+      {showConflictError ? (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: "14px 18px",
+            borderRadius: 12,
+            background: "#fef2f2",
+            color: "#b91c1c",
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {CONFLICT_MESSAGE}
+        </div>
+      ) : null}
+
+      {showAvailabilityError ? (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: "14px 18px",
+            borderRadius: 12,
+            background: "#fef2f2",
+            color: "#b91c1c",
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {availabilityMessage}
+        </div>
+      ) : null}
+
       <form
         action={createAppointment}
         style={{
@@ -135,9 +230,9 @@ export default async function NewAppointmentPage() {
           <label htmlFor="client_id" style={{ display: "block", marginBottom: 8, fontWeight: 700 }}>
             Client
           </label>
-          <select id="client_id" name="client_id" required style={inputStyle} defaultValue="">
+          <select id="client_id" name="client_id" required style={inputStyle} defaultValue={prefillClientId}>
             <option value="" disabled>Select a client</option>
-            {clients?.map((client) => (
+            {clientList.map((client) => (
               <option key={client.id} value={client.id}>
                 {client.first_name} {client.last_name ?? ""}
               </option>
@@ -187,6 +282,9 @@ export default async function NewAppointmentPage() {
               Time
             </label>
             <input id="appointment_time" name="appointment_time" type="time" required style={inputStyle} />
+            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#666" }}>
+              Availability is checked against service duration, stylist hours, blocked time, and existing bookings.
+            </p>
           </div>
         </div>
 

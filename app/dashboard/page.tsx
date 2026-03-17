@@ -1,83 +1,156 @@
 import Link from "next/link";
-import { getActiveRole } from "@/app/lib/roleCookies";
-import { roleLabel } from "@/app/lib/roles";
+import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 
-export default async function DashboardOverviewPage() {
-  const role = await getActiveRole();
+export default async function DashboardPage() {
+  const supabase = await createSupabaseServerClient();
+
+  const [
+    { count: clientsCount },
+    { count: appointmentsCount },
+    { count: servicesCount },
+    { count: stylistsCount },
+  ] = await Promise.all([
+    supabase.from("clients").select("*", { count: "exact", head: true }),
+    supabase.from("appointments").select("*", { count: "exact", head: true }),
+    supabase.from("services").select("*", { count: "exact", head: true }),
+    supabase.from("stylists").select("*", { count: "exact", head: true }),
+  ]);
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          This is the dashboard shell foundation. Current role:{" "}
-          <span className="font-medium">{roleLabel(role)}</span>.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <Card
-          title="Appointments"
-          description="View, filter, and manage bookings."
-          href="/dashboard/appointments"
-        />
-        <Card
-          title="Clients"
-          description="Client profiles, history, notes."
-          href="/dashboard/clients"
-        />
-        <Card
-          title="Earnings"
-          description="Tips, commission, payouts."
-          href="/dashboard/earnings"
-        />
-        <Card
-          title="Settings"
-          description="Business settings and configuration."
-          href="/dashboard/settings"
-        />
-      </div>
-
-      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/20 dark:text-zinc-200">
-        <p className="font-medium">Temporary role setup</p>
-        <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Until real auth is added, role is stored in an httpOnly cookie. Use{" "}
-          <Link href="/dashboard/settings" className="underline">
-            Dashboard Settings
-          </Link>{" "}
-          to switch roles for development.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Card({
-  title,
-  description,
-  href,
-}: {
-  title: string;
-  description: string;
-  href: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group rounded-xl border border-zinc-200 bg-white p-4 shadow-sm transition hover:border-zinc-300 hover:shadow dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700"
+    <main
+      style={{
+        padding: 40,
+        fontFamily: "Arial, sans-serif",
+        maxWidth: 1200,
+        margin: "0 auto",
+      }}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{title}</p>
-          <p className="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
-            {description}
-          </p>
-        </div>
-        <span className="text-zinc-400 transition group-hover:translate-x-0.5 group-hover:text-zinc-700 dark:group-hover:text-zinc-200">
-          →
-        </span>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: "2.4rem", margin: "0 0 10px 0" }}>
+          Salon Dashboard
+        </h1>
+        <p style={{ margin: 0, color: "#666" }}>
+          Your operating center for clients, bookings, services, and stylists.
+        </p>
       </div>
-    </Link>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 18,
+          marginBottom: 32,
+        }}
+      >
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Clients</div>
+          <div style={statNumberStyle}>{clientsCount ?? 0}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Appointments</div>
+          <div style={statNumberStyle}>{appointmentsCount ?? 0}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Services</div>
+          <div style={statNumberStyle}>{servicesCount ?? 0}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Stylists</div>
+          <div style={statNumberStyle}>{stylistsCount ?? 0}</div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          gap: 18,
+        }}
+      >
+        <Link href="/dashboard/clients" style={cardLinkStyle}>
+          <div style={featureCardStyle}>
+            <h2 style={cardTitleStyle}>Clients</h2>
+            <p style={cardTextStyle}>
+              Search, view, and manage client records.
+            </p>
+          </div>
+        </Link>
+
+        <Link href="/appointments" style={cardLinkStyle}>
+          <div style={featureCardStyle}>
+            <h2 style={cardTitleStyle}>Appointments</h2>
+            <p style={cardTextStyle}>
+              View the calendar, create bookings, and manage statuses.
+            </p>
+          </div>
+        </Link>
+
+        <Link href="/clients/new" style={cardLinkStyle}>
+          <div style={featureCardStyle}>
+            <h2 style={cardTitleStyle}>New Client</h2>
+            <p style={cardTextStyle}>
+              Quickly add a new client record for front-desk intake.
+            </p>
+          </div>
+        </Link>
+
+        <Link href="/dashboard/appointments/new" style={cardLinkStyle}>
+          <div style={featureCardStyle}>
+            <h2 style={cardTitleStyle}>New Appointment</h2>
+            <p style={cardTextStyle}>
+              Book a new appointment with client, service, and stylist.
+            </p>
+          </div>
+        </Link>
+      </div>
+    </main>
   );
 }
 
+const statCardStyle: React.CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e5e5",
+  borderRadius: 18,
+  padding: 22,
+  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+};
+
+const statLabelStyle: React.CSSProperties = {
+  color: "#666",
+  fontWeight: 700,
+  marginBottom: 10,
+};
+
+const statNumberStyle: React.CSSProperties = {
+  fontSize: "2rem",
+  fontWeight: 800,
+  color: "#111",
+};
+
+const cardLinkStyle: React.CSSProperties = {
+  textDecoration: "none",
+  color: "inherit",
+};
+
+const featureCardStyle: React.CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e5e5",
+  borderRadius: 18,
+  padding: 22,
+  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+  height: "100%",
+};
+
+const cardTitleStyle: React.CSSProperties = {
+  margin: "0 0 10px 0",
+  fontSize: "1.2rem",
+};
+
+const cardTextStyle: React.CSSProperties = {
+  margin: 0,
+  color: "#555",
+  lineHeight: 1.5,
+};

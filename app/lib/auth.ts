@@ -1,51 +1,55 @@
 import { createSupabaseServerClient } from "./supabaseServer";
-import { normalizeRole, type AppRole } from "./roles";
 
 export type CurrentUserProfile = {
-  id: string;
-  email: string;
-  fullName: string | null;
-  role: AppRole;
-  salonId: string | null;
-  locationId: string | null;
+  id: string | null;
+  email: string | null;
+  full_name: string | null;
+  role: string;
+  salon_id: string | null;
+  location_id: string | null;
 };
 
+function normalizeRole(role: string | null | undefined) {
+  if (!role) return "guest";
+
+  const validRoles = ["owner", "manager", "receptionist", "stylist", "assistant", "guest"];
+  return validRoles.includes(role) ? role : "guest";
+}
+
 export async function getCurrentUserWithProfile(): Promise<CurrentUserProfile | null> {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
 
   const {
     data: { user },
     error: userError,
   } = await supabase.auth.getUser();
 
-  if (userError || !user) {
-    return null;
-  }
+  if (userError || !user) return null;
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("email, full_name, role, salon_id, location_id")
+    .select("id, email, full_name, role, salon_id, location_id")
     .eq("id", user.id)
     .maybeSingle();
 
   if (!profile) {
     return {
       id: user.id,
-      email: user.email ?? "",
-      fullName: null,
+      email: user.email ?? null,
+      full_name: (user.user_metadata?.full_name as string | undefined) ?? null,
       role: "guest",
-      salonId: null,
-      locationId: null,
+      salon_id: null,
+      location_id: null,
     };
   }
 
   return {
-    id: user.id,
-    email: (profile as any).email ?? user.email ?? "",
-    fullName: (profile as any).full_name ?? null,
-    role: normalizeRole((profile as any).role),
-    salonId: (profile as any).salon_id ?? null,
-    locationId: (profile as any).location_id ?? null,
+    id: profile.id,
+    email: profile.email ?? user.email ?? null,
+    full_name: profile.full_name ?? null,
+    role: normalizeRole(profile.role),
+    salon_id: profile.salon_id ?? null,
+    location_id: profile.location_id ?? null,
   };
 }
 

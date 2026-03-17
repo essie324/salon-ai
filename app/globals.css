@@ -24,3 +24,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Day scheduler: empty slot and appointment block hover */
+.scheduler-slot-hover:hover {
+  background: #f5f5f5;
+}
+.appointment-block-hover:hover {
+  opacity: 0.92;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
