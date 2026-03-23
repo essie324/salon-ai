@@ -6,10 +6,13 @@ import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 type SearchParams = {
   clientId?: string;
   stylistId?: string;
+  serviceId?: string;
   date?: string;
   time?: string;
   error?: string;
   message?: string;
+  /** "1" — arrived from rebooking CTA; show context panel when client matches */
+  rebook?: string;
 };
 
 type Client = {
@@ -18,6 +21,7 @@ type Client = {
   last_name: string | null;
   email: string | null;
   phone: string | null;
+  preferred_stylist_id?: string | null;
 };
 
 type Service = {
@@ -93,6 +97,10 @@ async function createAppointment(formData: FormData) {
   redirect(`/dashboard/appointments?date=${appointment_date}`);
 }
 
+function stylistDisplayName(s: Stylist) {
+  return `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Stylist";
+}
+
 export default async function DashboardNewAppointmentPage({
   searchParams,
 }: {
@@ -108,7 +116,7 @@ export default async function DashboardNewAppointmentPage({
   ] = await Promise.all([
     supabase
       .from("clients")
-      .select("id, first_name, last_name, email, phone")
+      .select("id, first_name, last_name, email, phone, preferred_stylist_id")
       .order("first_name", { ascending: true }),
     supabase
       .from("services")
@@ -133,8 +141,36 @@ export default async function DashboardNewAppointmentPage({
     ? clients.find((c) => c.id === params.clientId) ?? null
     : null;
 
-  const selectedStylist = params.stylistId
-    ? stylists.find((s) => s.id === params.stylistId) ?? null
+  const serviceIds = new Set(services.map((s) => s.id));
+  const stylistIds = new Set(stylists.map((s) => s.id));
+
+  const paramServiceId = params.serviceId?.trim();
+  const effectiveServiceId =
+    paramServiceId && serviceIds.has(paramServiceId) ? paramServiceId : "";
+
+  const paramStylistId = params.stylistId?.trim();
+  const effectiveStylistId =
+    paramStylistId && stylistIds.has(paramStylistId) ? paramStylistId : "";
+
+  const selectedStylist = effectiveStylistId
+    ? stylists.find((s) => s.id === effectiveStylistId) ?? null
+    : null;
+
+  const selectedService = effectiveServiceId
+    ? services.find((s) => s.id === effectiveServiceId) ?? null
+    : null;
+
+  const isRebookFlow = params.rebook === "1" || params.rebook === "true";
+  const showRebookPanel =
+    isRebookFlow && selectedClient != null && params.date?.trim();
+
+  const recommendedDateLabel = params.date?.trim()
+    ? new Date(params.date.trim() + "T12:00:00").toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
     : null;
 
   return (
@@ -161,7 +197,54 @@ export default async function DashboardNewAppointmentPage({
         </div>
       ) : null}
 
-      {(selectedClient || selectedStylist) && (
+      {showRebookPanel ? (
+        <section style={rebookPanelStyle}>
+          <div style={rebookPanelHeaderRowStyle}>
+            <h2 style={rebookPanelTitleStyle}>Rebooking recommendation</h2>
+            <span style={rebookBadgeStyle}>Retention</span>
+          </div>
+          <p style={rebookLeadStyle}>
+            You opened this form from a rebooking reminder. Details below are prefilled when
+            possible—adjust date and time to match real availability.
+          </p>
+          <ul style={rebookListStyle}>
+            <li>
+              <strong>Client</strong>{" "}
+              {`${selectedClient!.first_name ?? ""} ${selectedClient!.last_name ?? ""}`.trim() ||
+                "Client"}
+            </li>
+            {selectedService ? (
+              <li>
+                <strong>Last completed service (suggested repeat)</strong> {selectedService.name ?? "Service"}
+              </li>
+            ) : paramServiceId && !effectiveServiceId ? (
+              <li style={{ color: "#92400e" }}>
+                <strong>Service</strong> Previous service is no longer in the catalog—pick a current
+                service.
+              </li>
+            ) : null}
+            {recommendedDateLabel ? (
+              <li>
+                <strong>Recommended next visit</strong> {recommendedDateLabel}
+              </li>
+            ) : null}
+            {selectedStylist ? (
+              <li>
+                <strong>Preferred stylist</strong> {stylistDisplayName(selectedStylist)}
+              </li>
+            ) : !effectiveStylistId && selectedClient?.preferred_stylist_id ? (
+              <li style={{ color: "#555" }}>
+                <strong>Preferred stylist</strong>{" "}
+                {paramStylistId && !stylistIds.has(paramStylistId)
+                  ? "Saved preference is not on the active stylist list—pick a stylist."
+                  : "Not set or not on the active list—choose a stylist."}
+              </li>
+            ) : null}
+          </ul>
+        </section>
+      ) : null}
+
+      {(selectedClient || selectedStylist) && !showRebookPanel ? (
         <div style={prefillBoxStyle}>
           {selectedClient ? (
             <p style={{ margin: "0 0 6px 0" }}>
@@ -172,12 +255,11 @@ export default async function DashboardNewAppointmentPage({
 
           {selectedStylist ? (
             <p style={{ margin: 0 }}>
-              <strong>Preferred stylist:</strong>{" "}
-              {`${selectedStylist.first_name ?? ""} ${selectedStylist.last_name ?? ""}`.trim()}
+              <strong>Preferred stylist:</strong> {stylistDisplayName(selectedStylist)}
             </p>
           ) : null}
         </div>
-      )}
+      ) : null}
 
       <form action={createAppointment} style={formStyle}>
         <div>
@@ -207,7 +289,12 @@ export default async function DashboardNewAppointmentPage({
 
         <div>
           <label style={labelStyle}>Service *</label>
-          <select name="service_id" defaultValue="" required style={inputStyle}>
+          <select
+            name="service_id"
+            defaultValue={effectiveServiceId}
+            required
+            style={inputStyle}
+          >
             <option value="">Select service</option>
             {services.map((service) => (
               <option key={service.id} value={service.id}>
@@ -225,15 +312,13 @@ export default async function DashboardNewAppointmentPage({
           <label style={labelStyle}>Stylist *</label>
           <select
             name="stylist_id"
-            defaultValue={params.stylistId ?? ""}
+            defaultValue={effectiveStylistId}
             required
             style={inputStyle}
           >
             <option value="">Select stylist</option>
             {stylists.map((stylist) => {
-              const name =
-                `${stylist.first_name ?? ""} ${stylist.last_name ?? ""}`.trim() ||
-                "Unnamed Stylist";
+              const name = stylistDisplayName(stylist);
 
               return (
                 <option key={stylist.id} value={stylist.id}>
@@ -275,7 +360,12 @@ export default async function DashboardNewAppointmentPage({
 
         <div>
           <label style={labelStyle}>Service Goal</label>
-          <textarea name="service_goal" rows={3} style={textareaStyle} />
+          <textarea
+            name="service_goal"
+            rows={3}
+            style={textareaStyle}
+            defaultValue={showRebookPanel ? "Rebooking / maintenance follow-up" : ""}
+          />
         </div>
 
         <label style={checkboxRowStyle}>
@@ -354,6 +444,58 @@ const errorBoxStyle: CSSProperties = {
   padding: 14,
   borderRadius: 12,
   marginBottom: 20,
+};
+
+const rebookPanelStyle: CSSProperties = {
+  background: "linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%)",
+  border: "1px solid #bae6fd",
+  borderRadius: 16,
+  padding: 20,
+  marginBottom: 22,
+  boxShadow: "0 2px 12px rgba(14, 116, 144, 0.08)",
+};
+
+const rebookPanelHeaderRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  flexWrap: "wrap",
+  marginBottom: 8,
+};
+
+const rebookPanelTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "1.15rem",
+  fontWeight: 800,
+  color: "#0c4a6e",
+};
+
+const rebookBadgeStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "#e0f2fe",
+  color: "#0369a1",
+  border: "1px solid #7dd3fc",
+};
+
+const rebookLeadStyle: CSSProperties = {
+  margin: "0 0 12px 0",
+  fontSize: 14,
+  color: "#334155",
+  lineHeight: 1.5,
+};
+
+const rebookListStyle: CSSProperties = {
+  margin: 0,
+  paddingLeft: 18,
+  color: "#1e293b",
+  fontSize: 14,
+  lineHeight: 1.65,
 };
 
 const prefillBoxStyle: CSSProperties = {

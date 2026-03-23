@@ -1,49 +1,26 @@
 /**
- * Simple service-based rebooking rules (first implementation).
- * Uses service name matching, case-insensitive.
+ * Client list / lightweight rebooking helpers.
+ * Interval rules are defined in `rebooking/engine.ts`.
  */
-export function getRecommendedWeeksForServiceName(name: string | null | undefined): number {
-  if (!name) return 6;
-  const lower = name.toLowerCase();
+import { getRecommendedIntervalWeeksForServiceName } from "@/app/lib/rebooking/engine";
 
-  if (lower.includes("consultation")) return 0; // no recommendation
+export {
+  computeClientRebookingDecision,
+  getRecommendedIntervalWeeksForServiceName,
+} from "@/app/lib/rebooking/engine";
+export {
+  buildRebookingNewAppointmentHref,
+  newAppointmentHrefFromRebookingContext,
+  prefillAppointmentDateFromRecommendation,
+  rebookingTimingHint,
+  parseLocalDateISO,
+} from "@/app/lib/rebooking/bookingQuery";
 
-  // Haircut
-  if (lower.includes("cut") || lower.includes("trim")) return 6;
-
-  // Blonding / highlights
-  if (
-    lower.includes("blond") ||
-    lower.includes("highlight") ||
-    lower.includes("balayage") ||
-    lower.includes("foil")
-  ) {
-    return 8;
-  }
-
-  // Root touch-up / color maintenance
-  if (
-    lower.includes("root") ||
-    lower.includes("touch") ||
-    lower.includes("regrowth") ||
-    lower.includes("toner") ||
-    lower.includes("gloss")
-  ) {
-    return 6;
-  }
-
-  // Extensions maintenance
-  if (
-    lower.includes("extension") ||
-    lower.includes("move-up") ||
-    lower.includes("move up") ||
-    lower.includes("maintenance")
-  ) {
-    return 6;
-  }
-
-  // Default
-  return 6;
+/** @deprecated Use getRecommendedIntervalWeeksForServiceName */
+export function getRecommendedWeeksForServiceName(
+  name: string | null | undefined,
+): number {
+  return getRecommendedIntervalWeeksForServiceName(name);
 }
 
 export type RebookingInfo = {
@@ -54,8 +31,7 @@ export type RebookingInfo = {
 };
 
 /**
- * Given a client's appointments and the service lookup, returns rebooking info
- * based **only** on the most recent completed appointment.
+ * Most recent completed appointment only; same interval as engine (no status flags).
  */
 export function computeRebookingInfo(options: {
   appointments: { start_at: string; status: string; service_id: string | null }[];
@@ -66,7 +42,7 @@ export function computeRebookingInfo(options: {
 
   const completed = appointments
     .filter((a) => a.status === "completed" && a.start_at)
-    .sort((a, b) => (a.start_at < b.start_at ? 1 : -1)); // newest first
+    .sort((a, b) => (a.start_at < b.start_at ? 1 : -1));
 
   if (completed.length === 0) {
     return {
@@ -82,7 +58,7 @@ export function computeRebookingInfo(options: {
   const service = last.service_id ? serviceById.get(last.service_id) ?? null : null;
   const lastServiceName = service?.name ?? null;
 
-  const weeks = getRecommendedWeeksForServiceName(lastServiceName);
+  const weeks = getRecommendedIntervalWeeksForServiceName(lastServiceName);
   if (weeks <= 0) {
     return {
       lastCompletedAt: lastDate,
@@ -93,7 +69,7 @@ export function computeRebookingInfo(options: {
   }
 
   const recommendedDate = addWeeks(lastDate, weeks);
-  const overdue = recommendedDate < startOfDay(today);
+  const overdue = startOfDay(recommendedDate) < startOfDay(today);
 
   return {
     lastCompletedAt: lastDate,
@@ -114,4 +90,3 @@ function startOfDay(date: Date): Date {
   d.setHours(0, 0, 0, 0);
   return d;
 }
-

@@ -3,17 +3,21 @@ import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { getDashboardSummary } from "@/app/lib/dashboard/getDashboardSummary";
 import { computeRevenueInsights, type AppointmentRevenueRow } from "@/app/lib/revenue/metrics";
 import { getCurrentWeekRangeISO, localDateISO } from "@/app/lib/dashboard/dateRanges";
+import {
+  newAppointmentHrefFromRebookingContext,
+  rebookingTimingHint,
+} from "@/app/lib/rebooking/bookingQuery";
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient();
   const summary = await getDashboardSummary(supabase);
 
   const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
-  const rebookingBadgeStyle = (status: "upcoming" | "due" | "overdue") => {
+  const rebookingBadgeStyle = (status: "not_due" | "due_soon" | "overdue") => {
     if (status === "overdue") {
       return { background: "#fef2f2", color: "#b91c1c", border: "1px solid #fecaca" };
     }
-    if (status === "due") {
+    if (status === "due_soon") {
       return { background: "#fffbeb", color: "#92400e", border: "1px solid #fde68a" };
     }
     return { background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb" };
@@ -374,45 +378,102 @@ export default async function DashboardPage() {
         <section style={featureCardStyle}>
           <h2 style={cardTitleStyle}>Clients to Rebook</h2>
           <p style={{ ...cardTextStyle, marginBottom: 12, fontSize: 13 }}>
-            Personalized return dates based on service windows, client cadence, and booking protection.
+            Based on each client&apos;s last completed service and a simple return window (e.g. 6–8 weeks).
           </p>
           {summary.rebooking.clientsToRebook.length === 0 ? (
             <p style={{ margin: 0, fontSize: 13, color: "#555" }}>
-              No rebooking recommendations available.
+              No clients due for rebooking right now.
             </p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
               {summary.rebooking.clientsToRebook.map((c) => {
-                const label = c.status === "overdue" ? "Overdue" : c.status === "due" ? "Due" : "Upcoming";
+                const label = c.status === "overdue" ? "Overdue" : "Due soon";
+                const bookHref = newAppointmentHrefFromRebookingContext({
+                  clientId: c.id,
+                  recommendedNextVisitISO: c.recommendedNextISO,
+                  lastServiceId: c.lastServiceId,
+                  preferredStylistId: c.preferredStylistId,
+                  today: now,
+                });
+                const timingHint = rebookingTimingHint({
+                  status: c.status,
+                  daysUntilOrOverdue: c.daysUntilOrOverdue,
+                  recommendedNextISO: c.recommendedNextISO,
+                  weekStartISO: summary.week.startISO,
+                  weekEndISO: summary.week.endISO,
+                });
                 return (
                   <li key={c.id} style={{ padding: "8px 0", borderBottom: "1px solid #f0f0f0" }}>
-                    <Link
-                      href={`/dashboard/clients/${c.id}`}
-                      style={{ textDecoration: "none", color: "#111", display: "flex", flexDirection: "column", gap: 6 }}
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "flex-start",
+                        flexWrap: "wrap",
+                      }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                        <span style={{ fontWeight: 700, fontSize: 14 }}>{c.name}</span>
-                        <span
-                          style={{
-                            ...rebookingBadgeStyle(c.status),
-                            padding: "4px 10px",
-                            borderRadius: 999,
-                            fontSize: 12,
-                            fontWeight: 800,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {label}
+                      <Link
+                        href={`/dashboard/clients/${c.id}`}
+                        style={{
+                          textDecoration: "none",
+                          color: "#111",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          flex: "1 1 200px",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{c.name}</span>
+                          <span
+                            style={{
+                              ...rebookingBadgeStyle(c.status),
+                              padding: "4px 10px",
+                              borderRadius: 999,
+                              fontSize: 12,
+                              fontWeight: 800,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {label}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: 12, color: "#555" }}>
+                          Last service: {c.lastServiceName ?? "—"} · Last visit: {c.lastCompletedISO}
+                          <br />
+                          Recommended next: {c.recommendedNextISO}
                         </span>
-                      </div>
-                      <span style={{ fontSize: 12, color: "#555" }}>
-                        Last visit: {c.lastVisitISO} · Return: {c.recommendedReturnISO}
-                        {typeof c.daysSinceLastVisit === "number"
-                          ? ` · ${c.daysSinceLastVisit} day${c.daysSinceLastVisit === 1 ? "" : "s"} since visit`
-                          : ""}
-                        {c.reasoning ? ` · ${c.reasoning}` : ""}
-                      </span>
-                    </Link>
+                        {timingHint ? (
+                          <span
+                            style={{
+                              fontSize: 12,
+                              color: c.status === "overdue" ? "#9a3412" : "#a16207",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {timingHint}
+                          </span>
+                        ) : null}
+                      </Link>
+                      <Link
+                        href={bookHref}
+                        style={{
+                          textDecoration: "none",
+                          padding: "10px 14px",
+                          borderRadius: 10,
+                          border: "1px solid #111",
+                          background: "#111",
+                          color: "#fff",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          whiteSpace: "nowrap",
+                          alignSelf: "center",
+                        }}
+                      >
+                        Book appointment
+                      </Link>
+                    </div>
                   </li>
                 );
               })}

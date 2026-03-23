@@ -10,13 +10,8 @@ export async function computeClientIntelligence(args: {
   now: Date;
   appointments: AppointmentIntelligenceLike[];
   serviceById: Map<string, { name: string | null }>;
-  clientRisk?: {
-    noShowCount?: number | null;
-    depositRequired?: boolean | null;
-    bookingRestricted?: boolean | null;
-  };
 }): Promise<ClientIntelligence> {
-  const { clientId, now, appointments, serviceById, clientRisk } = args;
+  const { clientId, now, appointments, serviceById } = args;
 
   const metrics = computeClientVisitMetrics(appointments);
   const spend = computeClientTotalSpendCents(appointments);
@@ -26,11 +21,10 @@ export async function computeClientIntelligence(args: {
     serviceById,
     today: now,
     dueSoonDays: 14,
-    clientRisk,
   });
 
-  const recommendedReturnDate = rebooking.recommended_date;
-  const rebookingStatus = rebooking.status;
+  const recommendedReturnDate = rebooking.recommended_next_visit_date;
+  const rebookingStatus = rebooking.rebooking_status;
 
   const classification = classifyClientCategory({
     now,

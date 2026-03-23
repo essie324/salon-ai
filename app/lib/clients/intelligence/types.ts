@@ -26,6 +26,6 @@ export type ClientIntelligence = {
   spend: ClientSpendMetrics;
 
   // If available (based on rebooking rules)
-  rebookingStatus?: "upcoming" | "due" | "overdue";
+  rebookingStatus?: "not_due" | "due_soon" | "overdue";
   recommendedReturnDate?: Date | null;
 };

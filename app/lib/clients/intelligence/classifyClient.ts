@@ -23,7 +23,7 @@ function daysBetween(now: Date, then: Date): number {
 export function classifyClientCategory(args: {
   now: Date;
   metrics: ClientVisitMetrics;
-  rebookingStatus?: ClientRebookingDecision["status"];
+  rebookingStatus?: ClientRebookingDecision["rebooking_status"];
   recommendedReturnDate?: Date | null;
   spendCents: number;
   options?: ClassifyClientOptions;
@@ -44,8 +44,8 @@ export function classifyClientCategory(args: {
     };
   }
 
-  // At risk = overdue/due window signal.
-  if (rebookingStatus === "overdue" || rebookingStatus === "due") {
+  // At risk = overdue or due soon (retention nudge).
+  if (rebookingStatus === "overdue" || rebookingStatus === "due_soon") {
     return {
       category: "at_risk" as ClientCategory,
       labels: [

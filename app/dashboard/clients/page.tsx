@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
-import { computeRebookingInfo } from "@/app/lib/rebooking";
-import { getRebookingStatus } from "@/app/lib/retention";
+import { computeClientRebookingDecision } from "@/app/lib/rebooking/engine";
+import { startOfLocalDay } from "@/app/lib/retention";
 
 type Client = {
   id: string;
@@ -260,19 +260,22 @@ export default async function DashboardClientsPage({
               "Unnamed Client";
             const noShowCount = client.no_show_count ?? 0;
             const hasAppts = apptsByClient.has(client.id);
-            const info = hasAppts
-              ? computeRebookingInfo({
+            const todayStart = startOfLocalDay(new Date());
+            const rebooking = hasAppts
+              ? computeClientRebookingDecision({
                   appointments: apptsByClient.get(client.id)!,
                   serviceById: serviceMap,
+                  today: todayStart,
+                  dueSoonDays: 14,
                 })
               : null;
-            const recommendedDate = info?.recommendedDate ?? null;
-            const lastCompletedAt = info?.lastCompletedAt ?? null;
-            const lastServiceName = info?.lastServiceName ?? null;
-            const today = new Date();
-            const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-            const status = getRebookingStatus({ recommendedDate, today: startOfToday });
-            const showBadge = status !== "not_due" && recommendedDate != null;
+            const recommendedDate = rebooking?.recommended_next_visit_date ?? null;
+            const lastCompletedAt = rebooking?.last_completed_date ?? null;
+            const lastServiceName = rebooking?.last_completed_service ?? null;
+            const status = rebooking?.rebooking_status ?? "not_due";
+            const showBadge =
+              recommendedDate != null &&
+              (status === "due_soon" || status === "overdue");
 
             return (
               <Link
@@ -324,7 +327,7 @@ export default async function DashboardClientsPage({
                     </div>
                   )}
 
-                  {showBadge && (
+                  {showBadge && recommendedDate && (
                     <div
                       style={{
                         marginBottom: 6,
@@ -333,8 +336,8 @@ export default async function DashboardClientsPage({
                         fontWeight: 600,
                       }}
                     >
-                      {status === "overdue" ? "Overdue · " : "Due soon · "}
-                      {recommendedDate!.toLocaleDateString("en-US", {
+                      {status === "overdue" ? "Rebook overdue · " : "Rebook due soon · "}
+                      {recommendedDate.toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
                         year: "numeric",

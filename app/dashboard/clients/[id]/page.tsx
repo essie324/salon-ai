@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { statusLabel } from "@/app/lib/appointmentStatus";
-import { computeClientRebookingDecision, type RebookingStatus } from "@/app/lib/rebooking/engine";
+import { computeClientRebookingDecision } from "@/app/lib/rebooking/engine";
+import { newAppointmentHrefFromRebookingContext } from "@/app/lib/rebooking/bookingQuery";
+import { localDateISO } from "@/app/lib/dashboard/dateRanges";
+import { startOfLocalDay } from "@/app/lib/retention";
 import { computeClientVisitMetrics } from "@/app/lib/clients/intelligence/metrics";
 import { computeClientTotalSpendCents } from "@/app/lib/clients/intelligence/spend";
 import { classifyClientCategory } from "@/app/lib/clients/intelligence/classifyClient";
@@ -229,6 +232,7 @@ export default async function DashboardClientDetailPage({
   const bookingRestricted = typedClient.booking_restricted === true || noShowCount >= 3;
   const restrictionNote = typedClient.restriction_note?.trim() || null;
 
+  const todayStart = startOfLocalDay(new Date());
   const rebooking = computeClientRebookingDecision({
     appointments: appointmentList.map((a) => ({
       start_at: a.start_at,
@@ -236,21 +240,18 @@ export default async function DashboardClientDetailPage({
       service_id: a.service_id,
     })),
     serviceById: new Map(serviceList.map((s) => [s.id, { name: s.name }])),
-    clientRisk: {
-      noShowCount,
-      depositRequired,
-      bookingRestricted,
-    },
+    today: todayStart,
+    dueSoonDays: 14,
   });
 
   const clientVisitMetrics = computeClientVisitMetrics(appointmentList);
   const clientSpend = computeClientTotalSpendCents(appointmentList);
 
   const clientCategory = classifyClientCategory({
-    now: new Date(),
+    now: todayStart,
     metrics: clientVisitMetrics,
-    rebookingStatus: rebooking.status,
-    recommendedReturnDate: rebooking.recommended_date,
+    rebookingStatus: rebooking.rebooking_status,
+    recommendedReturnDate: rebooking.recommended_next_visit_date,
     spendCents: clientSpend.totalSpendCents,
   });
 
@@ -279,8 +280,8 @@ export default async function DashboardClientDetailPage({
           : "Regular";
 
   const lastCompletedLabel =
-    rebooking.last_completed_at != null
-      ? new Date(rebooking.last_completed_at).toLocaleDateString("en-US", {
+    rebooking.last_completed_date != null
+      ? rebooking.last_completed_date.toLocaleDateString("en-US", {
           month: "short",
           day: "numeric",
           year: "numeric",
@@ -288,13 +289,49 @@ export default async function DashboardClientDetailPage({
       : null;
 
   const recommendedLabel =
-    rebooking.recommended_date != null
-      ? rebooking.recommended_date.toLocaleDateString("en-US", {
+    rebooking.recommended_next_visit_date != null
+      ? rebooking.recommended_next_visit_date.toLocaleDateString("en-US", {
           month: "short",
           day: "numeric",
           year: "numeric",
         })
       : null;
+
+  const rebookingStatusLabel =
+    rebooking.rebooking_status === "overdue"
+      ? "Overdue"
+      : rebooking.rebooking_status === "due_soon"
+        ? "Due soon"
+        : "Not due yet";
+
+  const bookNextHref = newAppointmentHrefFromRebookingContext({
+    clientId: id,
+    recommendedNextVisitISO: rebooking.recommended_next_visit_date
+      ? localDateISO(rebooking.recommended_next_visit_date)
+      : null,
+    lastServiceId: rebooking.last_completed_service_id,
+    preferredStylistId: typedClient.preferred_stylist_id ?? null,
+    today: todayStart,
+  });
+
+  const rebookingCardAccent =
+    rebooking.rebooking_status === "overdue"
+      ? {
+          borderLeft: "4px solid #f87171",
+          background: "linear-gradient(180deg, #fff7f7 0%, #ffffff 100%)",
+          border: "1px solid #fecaca",
+        }
+      : rebooking.rebooking_status === "due_soon"
+        ? {
+            borderLeft: "4px solid #fbbf24",
+            background: "linear-gradient(180deg, #fffbeb 0%, #ffffff 100%)",
+            border: "1px solid #fde68a",
+          }
+        : {
+            borderLeft: "4px solid #86efac",
+            background: "linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%)",
+            border: "1px solid #bbf7d0",
+          };
 
   return (
     <main style={mainStyle}>
@@ -314,10 +351,7 @@ export default async function DashboardClientDetailPage({
           <Link href={`/dashboard/clients/${id}/edit`} style={secondaryButtonStyle}>
             Edit Client
           </Link>
-          <Link
-            href={`/dashboard/appointments/new?clientId=${id}`}
-            style={primaryButtonStyle}
-          >
+          <Link href={bookNextHref} style={primaryButtonStyle}>
             Book Next Appointment
           </Link>
         </div>
@@ -390,128 +424,99 @@ export default async function DashboardClientDetailPage({
           <div
             style={{
               marginTop: 16,
-              padding: 14,
-              borderRadius: 12,
-              background: "#f8fbff",
-              border: "1px solid #e0edff",
+              padding: 16,
+              borderRadius: 14,
+              ...rebookingCardAccent,
+              boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
             }}
           >
-            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Rebooking</h3>
-            {rebooking.last_completed_at == null ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800 }}>Rebooking recommendation</h3>
+              {rebooking.last_completed_date != null ? (
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 800,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    ...(rebooking.rebooking_status === "overdue"
+                      ? { background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca" }
+                      : rebooking.rebooking_status === "due_soon"
+                        ? { background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }
+                        : { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" }),
+                  }}
+                >
+                  {rebookingStatusLabel}
+                </span>
+              ) : null}
+            </div>
+            {rebooking.last_completed_date == null ? (
               <p style={{ margin: 0, fontSize: 14, color: "#555" }}>
-                No completed visits yet. Once this guest completes a service, we&apos;ll recommend their next visit date here.
+                No completed visits yet. After a completed service, we&apos;ll suggest a return date from the service type (typically 6–8 weeks).
               </p>
             ) : (
               <>
-                <p style={{ margin: "4px 0", fontSize: 14 }}>
-                  <strong>Last visit:</strong>{" "}
-                  {lastCompletedLabel}{" "}
-                  {rebooking.last_service_name ? `· ${rebooking.last_service_name}` : ""}
+                <p style={{ margin: "6px 0", fontSize: 14 }}>
+                  <strong>Last completed service:</strong> {rebooking.last_completed_service ?? "—"}
                 </p>
+                <p style={{ margin: "6px 0", fontSize: 14 }}>
+                  <strong>Last completed date:</strong> {lastCompletedLabel}
+                </p>
+                {preferredStylistName ? (
+                  <p style={{ margin: "6px 0", fontSize: 14, color: "#334155" }}>
+                    <strong>Preferred stylist:</strong> {preferredStylistName}
+                  </p>
+                ) : null}
                 {recommendedLabel ? (
-                  <p style={{ margin: "4px 0", fontSize: 14 }}>
+                  <p style={{ margin: "6px 0", fontSize: 14 }}>
                     <strong>Recommended next visit:</strong> {recommendedLabel}
                   </p>
                 ) : (
-                  <p style={{ margin: "4px 0", fontSize: 14 }}>
-                    <strong>Recommended next visit:</strong> — (consultation-only)
+                  <p style={{ margin: "6px 0", fontSize: 14 }}>
+                    <strong>Recommended next visit:</strong> — (e.g. consultation-only visit)
                   </p>
                 )}
-                {recommendedLabel && (
-                  <p
-                    style={{
-                      margin: "4px 0",
-                      fontSize: 13,
-                      color:
-                        rebooking.status === "overdue"
-                          ? "#b91c1c"
-                          : rebooking.status === "due"
-                            ? "#92400e"
-                            : "#15803d",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {rebooking.status === "overdue"
-                      ? "Overdue — time for maintenance"
-                      : rebooking.status === "due"
-                        ? "Due for maintenance"
-                        : "Upcoming — on track"}
-                    {typeof rebooking.days_since_last_visit === "number"
-                      ? ` · ${rebooking.days_since_last_visit} day${rebooking.days_since_last_visit === 1 ? "" : "s"} since last visit`
-                      : ""}
-                  </p>
-                )}
-                {recommendedLabel && rebooking.reasoning ? (
-                  <p style={{ margin: "4px 0 0", fontSize: 12, color: "#666", fontWeight: 700 }}>
-                    Why: {rebooking.reasoning}
+                <p
+                  style={{
+                    margin: "10px 0 0 0",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color:
+                      rebooking.rebooking_status === "overdue"
+                        ? "#b91c1c"
+                        : rebooking.rebooking_status === "due_soon"
+                          ? "#92400e"
+                          : "#166534",
+                  }}
+                >
+                  {rebooking.rebooking_status === "overdue" && recommendedLabel
+                    ? `Past due — book as soon as it fits the schedule.`
+                    : rebooking.rebooking_status === "due_soon" && recommendedLabel
+                      ? `Good time to reach out — ideal window is now.`
+                      : recommendedLabel
+                        ? `On track — no rush yet.`
+                        : null}
+                </p>
+                {typeof rebooking.days_until_or_overdue === "number" && recommendedLabel ? (
+                  <p style={{ margin: "6px 0 0 0", fontSize: 12, color: "#64748b" }}>
+                    {rebooking.days_until_or_overdue < 0
+                      ? `${Math.abs(rebooking.days_until_or_overdue)} day${Math.abs(rebooking.days_until_or_overdue) === 1 ? "" : "s"} after recommended date`
+                      : `${rebooking.days_until_or_overdue} day${rebooking.days_until_or_overdue === 1 ? "" : "s"} until recommended date`}
                   </p>
                 ) : null}
-
-                {recommendedLabel && (
-                  <div style={{ marginTop: 12 }}>
-                    <Link
-                      href={`/dashboard/appointments/new?clientId=${id}`}
-                      style={primaryButtonStyle}
-                    >
-                      Book Next Appointment
+                {recommendedLabel ? (
+                  <div style={{ marginTop: 14 }}>
+                    <Link href={bookNextHref} style={primaryButtonStyle}>
+                      Book next appointment
                     </Link>
+                    <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
+                      Opens the booking form with client, suggested service, date, and stylist prefilled when available.
+                    </p>
                   </div>
-                )}
+                ) : null}
               </>
-            )}
-          </div>
-
-          <div
-            style={{
-              marginTop: 12,
-              padding: 14,
-              borderRadius: 12,
-              background: "#fff",
-              border: "1px solid #eee",
-            }}
-          >
-            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Rebooking Recommendation</h3>
-            {rebooking.last_completed_at == null ? (
-              <p style={{ margin: 0, fontSize: 14, color: "#555" }}>
-                No completed visits yet.
-              </p>
-            ) : (
-              (() => {
-                const status = rebooking.status;
-                const label =
-                  status === "overdue"
-                    ? "Overdue"
-                    : status === "due"
-                      ? "Due"
-                      : "Upcoming";
-                const color =
-                  status === "overdue"
-                    ? "#b91c1c"
-                    : status === "due"
-                      ? "#92400e"
-                      : "#166534";
-                return (
-                  <>
-                    <p style={{ margin: "6px 0", fontSize: 14 }}>
-                      <strong>Last completed service:</strong>{" "}
-                      {rebooking.last_service_name ?? "—"}{" "}
-                      {rebooking.last_completed_at ? `· ${lastCompletedLabel}` : ""}
-                    </p>
-                    <p style={{ margin: "6px 0", fontSize: 14 }}>
-                      <strong>Recommended next visit:</strong>{" "}
-                      {recommendedLabel ?? "—"}
-                    </p>
-                    <p style={{ margin: "6px 0", fontSize: 13, fontWeight: 700, color }}>
-                      Status: {label}
-                    </p>
-                    {rebooking.reasoning ? (
-                      <p style={{ margin: "4px 0 0", fontSize: 12, color: "#666", fontWeight: 800 }}>
-                        Why: {rebooking.reasoning}
-                      </p>
-                    ) : null}
-                  </>
-                );
-              })()
             )}
           </div>
 
@@ -606,7 +611,7 @@ export default async function DashboardClientDetailPage({
 
             {clientCategory.category === "at_risk" || clientCategory.category === "inactive" ? (
               <div style={{ marginTop: 12 }}>
-                <Link href={`/dashboard/appointments/new?clientId=${id}`} style={primaryButtonStyle}>
+                <Link href={bookNextHref} style={primaryButtonStyle}>
                   Book Next Appointment
                 </Link>
               </div>

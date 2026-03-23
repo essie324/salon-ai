@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   computeClientRebookingDecision,
-  type RebookingStatus,
+  type RebookingNudgeStatus,
 } from "@/app/lib/rebooking/engine";
 import type { ClientCategory } from "@/app/lib/clients/intelligence/types";
 import { computeClientVisitMetrics } from "@/app/lib/clients/intelligence/metrics";
@@ -54,12 +54,15 @@ export type DashboardSummary = {
     clientsToRebook: {
       id: string;
       name: string;
-      lastVisitISO: string;
-      recommendedReturnISO: string;
-      status: RebookingStatus;
-      daysSinceLastVisit: number;
-      avgVisitFrequencyWeeks?: number | null;
-      reasoning?: string | null;
+      lastServiceName: string | null;
+      /** Last completed service id (for booking prefill). */
+      lastServiceId: string | null;
+      /** Client preferred stylist when set. */
+      preferredStylistId: string | null;
+      lastCompletedISO: string;
+      recommendedNextISO: string;
+      status: Extract<RebookingNudgeStatus, "due_soon" | "overdue">;
+      daysUntilOrOverdue: number;
     }[];
   };
 
@@ -234,7 +237,9 @@ export async function getDashboardSummary(
 
     supabase
       .from("clients")
-      .select("id, first_name, last_name, no_show_count, deposit_required, booking_restricted"),
+      .select(
+        "id, first_name, last_name, no_show_count, deposit_required, booking_restricted, preferred_stylist_id",
+      ),
 
     // visit memory existence (future-friendly signal; does not change timing yet)
     supabase
@@ -384,14 +389,14 @@ export async function getDashboardSummary(
   type RebookingClientRow = {
     id: string;
     name: string;
-    lastVisitDate: Date;
-    recommendedReturnDate: Date;
-    status: RebookingStatus;
-    daysSinceLastVisit: number;
+    lastCompletedDate: Date;
+    recommendedNextDate: Date;
+    status: Extract<RebookingNudgeStatus, "due_soon" | "overdue">;
+    daysUntilOrOverdue: number;
     hasVisitMemory: boolean;
     lastServiceName: string | null;
-    avgVisitFrequencyWeeks?: number | null;
-    reasoning?: string | null;
+    lastServiceId: string | null;
+    preferredStylistId: string | null;
   };
 
   const allRetention: RetentionRow[] = [];
@@ -436,11 +441,6 @@ export async function getDashboardSummary(
       serviceById: serviceMap,
       today: startOfToday,
       dueSoonDays: 14,
-      clientRisk: {
-        noShowCount: (client as any)?.no_show_count ?? 0,
-        depositRequired: (client as any)?.deposit_required ?? false,
-        bookingRestricted: (client as any)?.booking_restricted ?? false,
-      },
     });
 
     const metrics = computeClientVisitMetrics(appts);
@@ -448,8 +448,8 @@ export async function getDashboardSummary(
     const classification = classifyClientCategory({
       now: startOfToday,
       metrics,
-      rebookingStatus: decision.status,
-      recommendedReturnDate: decision.recommended_date,
+      rebookingStatus: decision.rebooking_status,
+      recommendedReturnDate: decision.recommended_next_visit_date,
       spendCents: spend.totalSpendCents,
     });
 
@@ -460,7 +460,7 @@ export async function getDashboardSummary(
         id: clientId,
         name: nameFromParts(client.first_name, client.last_name),
         lastVisitAt: metrics.lastVisitAt,
-        recommendedReturnDate: decision.recommended_date,
+        recommendedReturnDate: decision.recommended_next_visit_date,
         totalSpendCents: spend.totalSpendCents,
         noShowCount: metrics.noShowCount,
         cancellationCount: metrics.cancellationCount,
@@ -478,38 +478,41 @@ export async function getDashboardSummary(
       });
     }
 
-    // Rebooking queue: only show clients with a concrete recommended return date.
-    if (!decision.last_completed_at || !decision.recommended_date) continue;
+    // Rebooking queue: due soon / overdue only (concrete recommended return date).
+    if (!decision.recommended_next_visit_date) continue;
+    if (decision.rebooking_status !== "due_soon" && decision.rebooking_status !== "overdue") {
+      continue;
+    }
 
-    const lastCompletedISO = formatLocalISO(decision.last_completed_at);
-    const recommendedNextISO = formatLocalISO(decision.recommended_date);
+    if (!decision.last_completed_date) continue;
+
+    const lastCompletedISO = formatLocalISO(decision.last_completed_date);
+    const recommendedNextISO = formatLocalISO(decision.recommended_next_visit_date);
     if (!lastCompletedISO || !recommendedNextISO) continue;
 
     const hasVisitMemory = hasMemoryByClientId.has(clientId);
     clientsToRebookAll.push({
       id: clientId,
       name: nameFromParts(client.first_name, client.last_name),
-      lastVisitDate: decision.last_completed_at,
-      recommendedReturnDate: decision.recommended_date,
-      status: decision.status,
-      daysSinceLastVisit: decision.days_since_last_visit ?? 0,
+      lastCompletedDate: decision.last_completed_date,
+      recommendedNextDate: decision.recommended_next_visit_date,
+      status: decision.rebooking_status,
+      daysUntilOrOverdue: decision.days_until_or_overdue ?? 0,
       hasVisitMemory,
-      lastServiceName: decision.last_service_name,
-      avgVisitFrequencyWeeks: decision.avg_visit_frequency_weeks ?? null,
-      reasoning: decision.reasoning ?? null,
+      lastServiceName: decision.last_completed_service,
+      lastServiceId: decision.last_completed_service_id,
+      preferredStylistId: (client as { preferred_stylist_id?: string | null }).preferred_stylist_id ?? null,
     });
 
-    if (decision.status === "upcoming") continue;
-    const retentionStatus: "due_soon" | "overdue" =
-      decision.status === "due" ? "due_soon" : "overdue";
+    const retentionStatus = decision.rebooking_status;
 
     allRetention.push({
       id: clientId,
       name: nameFromParts(client.first_name, client.last_name),
-      lastServiceName: decision.last_service_name,
+      lastServiceName: decision.last_completed_service,
       lastCompletedISO,
       recommendedNextISO,
-      recommendedDate: decision.recommended_date,
+      recommendedDate: decision.recommended_next_visit_date,
       status: retentionStatus,
       hasVisitMemory,
     });
@@ -524,22 +527,22 @@ export async function getDashboardSummary(
 
   const clientsToRebook = clientsToRebookAll
     .sort((a, b) => {
-      const pri = (s: RebookingStatus) => (s === "overdue" ? 0 : s === "due" ? 1 : 2);
-      const pa = pri(a.status);
-      const pb = pri(b.status);
+      const pa = a.status === "overdue" ? 0 : 1;
+      const pb = b.status === "overdue" ? 0 : 1;
       if (pa !== pb) return pa - pb;
-      return a.recommendedReturnDate.getTime() - b.recommendedReturnDate.getTime();
+      return a.recommendedNextDate.getTime() - b.recommendedNextDate.getTime();
     })
     .slice(0, 12)
     .map((r) => ({
       id: r.id,
       name: r.name,
-      lastVisitISO: formatLocalISO(r.lastVisitDate)!,
-      recommendedReturnISO: formatLocalISO(r.recommendedReturnDate)!,
+      lastServiceName: r.lastServiceName,
+      lastServiceId: r.lastServiceId,
+      preferredStylistId: r.preferredStylistId,
+      lastCompletedISO: formatLocalISO(r.lastCompletedDate)!,
+      recommendedNextISO: formatLocalISO(r.recommendedNextDate)!,
       status: r.status,
-      daysSinceLastVisit: r.daysSinceLastVisit,
-      avgVisitFrequencyWeeks: r.avgVisitFrequencyWeeks ?? null,
-      reasoning: r.reasoning ?? null,
+      daysUntilOrOverdue: r.daysUntilOrOverdue,
     }));
 
   const overdue = allRetention
