@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
+import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
+import { linkIntakeSessionToAppointment } from "@/app/lib/intake/linkIntakeToAppointment";
 
 type SearchParams = {
   clientId?: string;
@@ -13,6 +15,8 @@ type SearchParams = {
   message?: string;
   /** "1" — arrived from rebooking CTA; show context panel when client matches */
   rebook?: string;
+  /** Prefill optional linked intake session (from guest intake flow). */
+  intakeSessionId?: string;
 };
 
 type Client = {
@@ -52,9 +56,27 @@ async function createAppointment(formData: FormData) {
   const service_goal = String(formData.get("service_goal") || "").trim();
   const intake_notes = String(formData.get("intake_notes") || "").trim();
   const consultation_required = formData.get("consultation_required") === "on";
+  const intake_session_id_raw = String(formData.get("intake_session_id") || "").trim();
 
   if (!client_id || !service_id || !stylist_id || !appointment_date || !appointment_time) {
     throw new Error("Missing required appointment fields.");
+  }
+
+  let intake_session_id: string | null = null;
+  if (FEATURE_INBOX_AND_INTAKE_DB && intake_session_id_raw) {
+    const { data: intake, error: intakeErr } = await supabase
+      .from("intake_sessions")
+      .select("id, client_id, appointment_id")
+      .eq("id", intake_session_id_raw)
+      .maybeSingle();
+
+    if (intakeErr) throw new Error(intakeErr.message);
+    if (!intake) throw new Error("Intake session not found.");
+    if (intake.appointment_id) throw new Error("That intake is already linked to an appointment.");
+    if (intake.client_id && intake.client_id !== client_id) {
+      throw new Error("Selected intake belongs to a different client.");
+    }
+    intake_session_id = intake_session_id_raw;
   }
 
   const { data: service, error: serviceError } = await supabase
@@ -75,7 +97,7 @@ async function createAppointment(formData: FormData) {
     startAtLocal.getTime() + durationMinutes * 60 * 1000
   ).toISOString();
 
-  const { error } = await supabase.from("appointments").insert({
+  const insertRow: Record<string, unknown> = {
     client_id,
     service_id,
     stylist_id,
@@ -88,10 +110,29 @@ async function createAppointment(formData: FormData) {
     service_goal: service_goal || null,
     intake_notes: intake_notes || null,
     consultation_required,
-  });
+  };
+  if (intake_session_id) {
+    insertRow.intake_session_id = intake_session_id;
+  }
+
+  const { data: created, error } = await supabase
+    .from("appointments")
+    .insert(insertRow)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw new Error(error.message);
+  }
+
+  if (intake_session_id && created?.id) {
+    const { error: linkErr } = await linkIntakeSessionToAppointment({
+      supabase,
+      appointmentId: created.id,
+      intakeSessionId: intake_session_id,
+      clientId: client_id,
+    });
+    if (linkErr) throw linkErr;
   }
 
   redirect(`/dashboard/appointments?date=${appointment_date}`);
@@ -109,10 +150,20 @@ export default async function DashboardNewAppointmentPage({
   const params = (await searchParams) ?? {};
   const supabase = await createSupabaseServerClient();
 
+  const intakeSessionsQuery = FEATURE_INBOX_AND_INTAKE_DB
+    ? supabase
+        .from("intake_sessions")
+        .select("id, client_id, requested_service, created_at")
+        .is("appointment_id", null)
+        .order("created_at", { ascending: false })
+        .limit(80)
+    : Promise.resolve({ data: [] as unknown[], error: null as null });
+
   const [
     { data: clientsData, error: clientsError },
     { data: servicesData, error: servicesError },
     { data: stylistsData, error: stylistsError },
+    intakeRes,
   ] = await Promise.all([
     supabase
       .from("clients")
@@ -127,15 +178,52 @@ export default async function DashboardNewAppointmentPage({
       .select("id, first_name, last_name, is_active")
       .eq("is_active", true)
       .order("first_name", { ascending: true }),
+    intakeSessionsQuery,
   ]);
 
   if (clientsError) throw new Error(clientsError.message);
   if (servicesError) throw new Error(servicesError.message);
   if (stylistsError) throw new Error(stylistsError.message);
+  if (FEATURE_INBOX_AND_INTAKE_DB && intakeRes.error) throw new Error(intakeRes.error.message);
 
   const clients = (clientsData ?? []) as Client[];
   const services = (servicesData ?? []) as Service[];
   const stylists = (stylistsData ?? []) as Stylist[];
+
+  const clientNameById = new Map(
+    clients.map((c) => [
+      c.id,
+      `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || c.email || c.phone || "Client",
+    ]),
+  );
+
+  type UnlinkedIntake = {
+    id: string;
+    client_id: string | null;
+    requested_service: string | null;
+    created_at: string;
+  };
+  const unlinkedIntakes = (intakeRes.data ?? []) as UnlinkedIntake[];
+
+  const paramIntakeId = params.intakeSessionId?.trim();
+  let intakePreview: (UnlinkedIntake & { appointment_id?: string | null }) | null =
+    paramIntakeId ? unlinkedIntakes.find((r) => r.id === paramIntakeId) ?? null : null;
+
+  if (FEATURE_INBOX_AND_INTAKE_DB && paramIntakeId && !intakePreview) {
+    const { data: row } = await supabase
+      .from("intake_sessions")
+      .select("id, client_id, requested_service, created_at, appointment_id")
+      .eq("id", paramIntakeId)
+      .maybeSingle();
+    intakePreview = row as typeof intakePreview;
+  }
+
+  const intakeAlreadyLinked = Boolean(
+    FEATURE_INBOX_AND_INTAKE_DB &&
+      intakePreview &&
+      "appointment_id" in intakePreview &&
+      (intakePreview as { appointment_id?: string | null }).appointment_id,
+  );
 
   const selectedClient = params.clientId
     ? clients.find((c) => c.id === params.clientId) ?? null
@@ -262,6 +350,30 @@ export default async function DashboardNewAppointmentPage({
       ) : null}
 
       <form action={createAppointment} style={formStyle}>
+        {FEATURE_INBOX_AND_INTAKE_DB && intakePreview && intakeAlreadyLinked ? (
+          <div style={intakeWarnStyle}>
+            This intake session is already linked to an appointment. Clear the URL or pick another
+            intake.
+          </div>
+        ) : null}
+
+        {FEATURE_INBOX_AND_INTAKE_DB && intakePreview && !intakeAlreadyLinked ? (
+          <div style={intakeHintBoxStyle}>
+            <strong style={{ display: "block", marginBottom: 6 }}>Linked intake (optional)</strong>
+            <span style={{ fontSize: 14, color: "#334155" }}>
+              {intakePreview.requested_service ?? "Intake"}{" "}
+              <span style={{ color: "#64748b" }}>
+                ·{" "}
+                {intakePreview.client_id
+                  ? clientNameById.get(intakePreview.client_id) ?? "Client"
+                  : "No client on file"}
+                ·{" "}
+                {new Date(intakePreview.created_at).toLocaleDateString()}
+              </span>
+            </span>
+          </div>
+        ) : null}
+
         <div>
           <label style={labelStyle}>Client *</label>
           <select
@@ -372,6 +484,38 @@ export default async function DashboardNewAppointmentPage({
           <input type="checkbox" name="consultation_required" />
           Consultation required
         </label>
+
+        {FEATURE_INBOX_AND_INTAKE_DB ? (
+          <div>
+            <label style={labelStyle}>Link intake session (optional)</label>
+            <select
+              name="intake_session_id"
+              defaultValue={
+                intakeAlreadyLinked ? "" : paramIntakeId && unlinkedIntakes.some((u) => u.id === paramIntakeId)
+                  ? paramIntakeId
+                  : ""
+              }
+              style={inputStyle}
+            >
+              <option value="">None</option>
+              {unlinkedIntakes.map((row) => {
+                const cn = row.client_id ? clientNameById.get(row.client_id) ?? "Client" : "Walk-in";
+                const label = `${cn} — ${(row.requested_service ?? "Intake").slice(0, 48)}${(row.requested_service?.length ?? 0) > 48 ? "…" : ""}`;
+                return (
+                  <option key={row.id} value={row.id}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+            <p style={helperTextStyle}>
+              Choose a saved guest intake to attach.{" "}
+              <Link href="/dashboard/appointments/intake" style={{ color: "#0b57d0", fontWeight: 700 }}>
+                New intake form →
+              </Link>
+            </p>
+          </div>
+        ) : null}
 
         <div>
           <label style={labelStyle}>Intake Notes</label>
@@ -584,4 +728,22 @@ const secondaryButtonStyle: CSSProperties = {
   borderRadius: 10,
   border: "1px solid #ccc",
   fontWeight: 700,
+};
+
+const intakeHintBoxStyle: CSSProperties = {
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  borderRadius: 12,
+  padding: 14,
+  marginBottom: 8,
+};
+
+const intakeWarnStyle: CSSProperties = {
+  background: "#fff7ed",
+  border: "1px solid #fed7aa",
+  color: "#9a3412",
+  borderRadius: 12,
+  padding: 12,
+  marginBottom: 12,
+  fontSize: 14,
 };

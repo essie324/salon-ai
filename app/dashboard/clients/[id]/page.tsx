@@ -132,7 +132,7 @@ export default async function DashboardClientDetailPage({
           )
           .eq("client_id", id)
           .order("created_at", { ascending: false })
-          .limit(5)
+          .limit(3)
       : Promise.resolve({ data: [] as unknown[], error: null }),
   ]);
 
@@ -718,9 +718,9 @@ export default async function DashboardClientDetailPage({
 
           {FEATURE_INBOX_AND_INTAKE_DB ? (
             <div style={{ marginTop: 18 }}>
-              <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Recent Intake Context</h3>
+              <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Recent Intake</h3>
               <p style={{ margin: "0 0 10px 0", fontSize: 13, color: "#555" }}>
-                Request context (what the guest asked for). Kept separate from appointment facts.
+                What the guest asked for before booking (structured intake). Separate from appointment notes.
               </p>
               {intakeList.length === 0 ? (
                 <p style={{ margin: 0, fontSize: 14, color: "#555" }}>

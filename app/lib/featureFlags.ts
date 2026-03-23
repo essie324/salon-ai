@@ -10,4 +10,4 @@
  * Then restore the full `app/dashboard/inbox/page.tsx` implementation if you replaced it
  * with a stub, or keep the stub until the feature is finished.
  */
-export const FEATURE_INBOX_AND_INTAKE_DB = false;
+export const FEATURE_INBOX_AND_INTAKE_DB = true;

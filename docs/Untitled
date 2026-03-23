@@ -1,0 +1,23 @@
+/**
+ * Feature flags for incomplete or optional systems.
+ *
+ * Turn these on only after the required database tables, policies,
+ * and related pages/helpers are fully in place.
+ */
+
+/**
+ * Inbox / intake / AI receptionist database layer.
+ *
+ * Requires:
+ * - public.intake_sessions
+ * - public.chat_messages (later if chat is used)
+ * - working RLS policies
+ *
+ * When false:
+ * - intake/inbox features stay off
+ * - core salon flows remain stable
+ *
+ * When true:
+ * - intake pages and intake-linked UI can run
+ */
+export const FEATURE_INBOX_AND_INTAKE_DB = true;

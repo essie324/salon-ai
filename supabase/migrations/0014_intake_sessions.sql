@@ -1,6 +1,3 @@
--- Intake sessions: conversational/request context for bookings.
--- Safe, idempotent migration: creates table only if missing.
-
 create table if not exists public.intake_sessions (
   id uuid primary key default gen_random_uuid(),
   client_id uuid null references public.clients(id) on delete set null,
@@ -25,8 +22,58 @@ create index if not exists intake_sessions_appointment_id_idx
 
 alter table public.intake_sessions enable row level security;
 
-drop policy if exists "Authenticated users can manage intake_sessions" on public.intake_sessions;
-create policy "Authenticated users can manage intake_sessions"
-  on public.intake_sessions for all
-  using (auth.role() = 'authenticated');
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'intake_sessions'
+      and policyname = 'Authenticated users can view intake sessions'
+  ) then
+    create policy "Authenticated users can view intake sessions"
+      on public.intake_sessions
+      for select
+      to authenticated
+      using (true);
+  end if;
 
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'intake_sessions'
+      and policyname = 'Authenticated users can insert intake sessions'
+  ) then
+    create policy "Authenticated users can insert intake sessions"
+      on public.intake_sessions
+      for insert
+      to authenticated
+      with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'intake_sessions'
+      and policyname = 'Authenticated users can update intake sessions'
+  ) then
+    create policy "Authenticated users can update intake sessions"
+      on public.intake_sessions
+      for update
+      to authenticated
+      using (true)
+      with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'intake_sessions'
+      and policyname = 'Authenticated users can delete intake sessions'
+  ) then
+    create policy "Authenticated users can delete intake sessions"
+      on public.intake_sessions
+      for delete
+      to authenticated
+      using (true);
+  end if;
+end $$;

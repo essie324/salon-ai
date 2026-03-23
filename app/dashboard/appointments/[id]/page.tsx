@@ -3,6 +3,8 @@ import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { statusBadgeStyleDetail, statusLabel } from "@/app/lib/appointmentStatus";
 import { StatusActions } from "@/app/dashboard/appointments/_components/StatusActions";
 import { hasAnyVisitMemory } from "@/app/lib/visitMemory";
+import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
+import { formatIntakeSummaryLines } from "@/app/lib/intake/formatIntakeSummary";
 
 type Appointment = {
   id: string;
@@ -17,6 +19,7 @@ type Appointment = {
   service_goal?: string | null;
   consultation_required?: boolean | null;
   intake_notes?: string | null;
+  intake_session_id?: string | null;
   deleted_at?: string | null;
   appointment_price_cents?: number | null;
   tip_cents?: number | null;
@@ -92,7 +95,7 @@ export default async function DashboardAppointmentDetailPage({
   const { data: appointment, error: appointmentError } = await supabase
     .from("appointments")
     .select(
-      "id, start_at, end_at, status, notes, cancellation_note, client_id, service_id, stylist_id, service_goal, consultation_required, intake_notes, deleted_at, appointment_price_cents, tip_cents, payment_status",
+      "id, start_at, end_at, status, notes, cancellation_note, client_id, service_id, stylist_id, service_goal, consultation_required, intake_notes, intake_session_id, deleted_at, appointment_price_cents, tip_cents, payment_status",
     )
     .eq("id", id)
     .maybeSingle();
@@ -126,7 +129,18 @@ export default async function DashboardAppointmentDetailPage({
 
   const appt = appointment as Appointment;
 
-  const [clientRes, serviceRes, stylistRes, memoryRes] = await Promise.all([
+  const intakeSessionQuery =
+    FEATURE_INBOX_AND_INTAKE_DB && appt.intake_session_id
+      ? supabase
+          .from("intake_sessions")
+          .select(
+            "id, source, requested_service, requested_stylist, timing_preference, budget_notes, concern_notes, ai_summary, created_at",
+          )
+          .eq("id", appt.intake_session_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null });
+
+  const [clientRes, serviceRes, stylistRes, memoryRes, intakeRes] = await Promise.all([
     appt.client_id
       ? supabase
           .from("clients")
@@ -155,7 +169,20 @@ export default async function DashboardAppointmentDetailPage({
       )
       .eq("appointment_id", id)
       .maybeSingle(),
+    intakeSessionQuery,
   ]);
+
+  const intakeSession = intakeRes.data as {
+    id: string;
+    source: string | null;
+    requested_service: string | null;
+    requested_stylist: string | null;
+    timing_preference: string | null;
+    budget_notes: string | null;
+    concern_notes: string | null;
+    ai_summary: string | null;
+    created_at: string;
+  } | null;
 
   const client = clientRes.data as Client | null;
   const service = serviceRes.data as Service | null;
@@ -179,6 +206,8 @@ export default async function DashboardAppointmentDetailPage({
   const paymentStatus = (appt.payment_status ?? "unpaid").toString();
 
   const showVisitMemory = hasAnyVisitMemory(memory);
+
+  const intakeSummaryLines = intakeSession ? formatIntakeSummaryLines(intakeSession) : [];
 
   return (
     <div style={mainStyle}>
@@ -372,6 +401,34 @@ export default async function DashboardAppointmentDetailPage({
                   ? appt.intake_notes
                   : "—"}
               </div>
+            </div>
+          </div>
+        )}
+
+        {FEATURE_INBOX_AND_INTAKE_DB && intakeSession && (
+          <div style={{ marginTop: 20 }}>
+            <p style={labelStyle}>Guest intake session</p>
+            <div style={{ ...notesBoxStyle, minHeight: 0 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+                Saved{" "}
+                {new Date(intakeSession.created_at).toLocaleString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}
+                {intakeSession.source ? ` · ${intakeSession.source}` : ""}
+              </div>
+              {intakeSummaryLines.length === 0 ? (
+                <p style={{ margin: 0, color: "#555", fontSize: 14 }}>Linked intake record (no summary text stored).</p>
+              ) : (
+                intakeSummaryLines.map((line, i) => (
+                  <div key={i} style={{ marginBottom: 8, whiteSpace: "pre-wrap", fontSize: 14 }}>
+                    {line}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}

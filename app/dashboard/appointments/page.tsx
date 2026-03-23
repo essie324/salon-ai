@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
+import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
 import { localDateISO } from "@/app/lib/dashboard/dateRanges";
 import { normalizeAppointmentDate } from "@/app/lib/appointmentLocalTime";
 
@@ -250,6 +251,11 @@ export default async function DashboardAppointmentsPage({
         </div>
 
         <div style={headerActionsStyle}>
+          {FEATURE_INBOX_AND_INTAKE_DB ? (
+            <Link href="/dashboard/appointments/intake" style={secondaryButtonStyle}>
+              Guest intake
+            </Link>
+          ) : null}
           <Link href="/dashboard/appointments/new" style={primaryButtonStyle}>
             Create Appointment
           </Link>
