@@ -1,0 +1,674 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  computeClientRebookingDecision,
+  type RebookingStatus,
+} from "@/app/lib/rebooking/engine";
+import type { ClientCategory } from "@/app/lib/clients/intelligence/types";
+import { computeClientVisitMetrics } from "@/app/lib/clients/intelligence/metrics";
+import { computeClientTotalSpendCents } from "@/app/lib/clients/intelligence/spend";
+import { classifyClientCategory } from "@/app/lib/clients/intelligence/classifyClient";
+import { getCurrentMonthRangeISO, getCurrentWeekRangeISO, localDateISO } from "./dateRanges";
+import { formatLocalISO, startOfLocalDay } from "@/app/lib/retention";
+import { getGapFillSuggestionsForDate, type GapFillSuggestion } from "@/app/lib/scheduling/optimizer";
+
+type MoneySummary = {
+  revenueCents: number;
+  completedCount: number;
+};
+
+export type DashboardSummary = {
+  todayISO: string;
+  week: { startISO: string; endISO: string };
+  month: { startISO: string; endISO: string };
+
+  totals: {
+    clients: number;
+    appointments: number;
+    services: number;
+    stylists: number;
+  };
+
+  revenue: {
+    today: MoneySummary;
+    week: MoneySummary;
+  };
+
+  todaysAppointments: {
+    total: number;
+    confirmed: number;
+    completed: number;
+    cancelled: number;
+    no_show: number;
+    checked_in: number;
+    scheduled: number;
+  };
+
+  overdueClients: {
+    id: string;
+    name: string;
+    lastServiceName: string | null;
+    recommendedNextISO: string;
+  }[];
+
+  rebooking: {
+    clientsToRebook: {
+      id: string;
+      name: string;
+      lastVisitISO: string;
+      recommendedReturnISO: string;
+      status: RebookingStatus;
+      daysSinceLastVisit: number;
+      avgVisitFrequencyWeeks?: number | null;
+      reasoning?: string | null;
+    }[];
+  };
+
+  clientIntelligence: {
+    counts: Record<ClientCategory, number>;
+    atRisk: {
+      id: string;
+      name: string;
+      lastVisitISO: string | null;
+      recommendedReturnISO: string | null;
+      totalSpendCents: number;
+      noShowCount: number;
+      cancellationCount: number;
+    }[];
+    highValue: {
+      id: string;
+      name: string;
+      lastVisitISO: string | null;
+      totalSpendCents: number;
+      avgVisitFrequencyDays: number | null;
+      totalVisits: number;
+    }[];
+  };
+
+  retention: {
+    dueSoonClients: {
+      id: string;
+      name: string;
+      lastServiceName: string | null;
+      lastCompletedISO: string;
+      recommendedNextISO: string;
+      status: "due_soon";
+      hasVisitMemory: boolean;
+    }[];
+    overdueClients: {
+      id: string;
+      name: string;
+      lastServiceName: string | null;
+      lastCompletedISO: string;
+      recommendedNextISO: string;
+      status: "overdue";
+      hasVisitMemory: boolean;
+    }[];
+    /**
+     * Action queue: who is most "ready" to rebook.
+     * Current rule: overdue + due soon within 7 days. (Timing rules unchanged.)
+     */
+    opportunities: {
+      id: string;
+      name: string;
+      lastServiceName: string | null;
+      lastCompletedISO: string;
+      recommendedNextISO: string;
+      status: "due_soon" | "overdue";
+      hasVisitMemory: boolean;
+    }[];
+  };
+
+  noShows: {
+    thisMonthCount: number;
+    topClients: { id: string; name: string; noShowCount: number }[];
+  };
+
+  topServices: {
+    serviceId: string;
+    serviceName: string;
+    completedCount: number;
+    revenueCents: number;
+  }[];
+
+  stylistUtilization: {
+    stylistId: string;
+    stylistName: string;
+    appointmentsToday: number;
+    completedToday: number;
+  }[];
+
+  gapFill: {
+    dateISO: string;
+    suggestions: GapFillSuggestion[];
+  };
+};
+
+function nameFromParts(first?: string | null, last?: string | null) {
+  return `${first ?? ""} ${last ?? ""}`.trim() || "Unnamed";
+}
+
+export async function getDashboardSummary(
+  supabase: SupabaseClient,
+): Promise<DashboardSummary> {
+  const now = new Date();
+  const todayISO = localDateISO(now);
+  const week = getCurrentWeekRangeISO(now);
+  const month = getCurrentMonthRangeISO(now);
+
+  // 1) Revenue + appointment status breakdowns
+  const [
+    { count: clientsCount },
+    { count: appointmentsCount },
+    { count: servicesCount },
+    { count: stylistsCount },
+    { data: revenueWeekRows },
+    { data: todayAppts },
+    { data: monthNoShows },
+    { data: topNoShowClients },
+    { data: stylists },
+    { data: services },
+    { data: completedWeekForServices },
+    { data: recentCompletedAppointments },
+    { data: clients },
+    { data: memoryJoinRows },
+  ] = await Promise.all([
+    supabase.from("clients").select("*", { count: "exact", head: true }),
+    supabase.from("appointments").select("*", { count: "exact", head: true }),
+    supabase.from("services").select("*", { count: "exact", head: true }),
+    supabase.from("stylists").select("*", { count: "exact", head: true }),
+    supabase
+      .from("appointments")
+      .select("appointment_date, appointment_price_cents, tip_cents")
+      .eq("status", "completed")
+      .is("deleted_at", null)
+      .gte("appointment_date", week.startISO)
+      .lte("appointment_date", week.endISO),
+
+    supabase
+      .from("appointments")
+      .select("id, status, stylist_id")
+      .is("deleted_at", null)
+      .eq("appointment_date", todayISO),
+
+    supabase
+      .from("appointments")
+      .select("id")
+      .is("deleted_at", null)
+      .eq("status", "no_show")
+      .gte("appointment_date", month.startISO)
+      .lte("appointment_date", month.endISO),
+
+    supabase
+      .from("clients")
+      .select("id, first_name, last_name, no_show_count")
+      .gt("no_show_count", 0)
+      .order("no_show_count", { ascending: false })
+      .limit(5),
+
+    supabase
+      .from("stylists")
+      .select("id, first_name, last_name")
+      .eq("is_active", true)
+      .order("first_name", { ascending: true }),
+
+    supabase.from("services").select("id, name").order("name", { ascending: true }),
+
+    supabase
+      .from("appointments")
+      .select("service_id, appointment_price_cents, tip_cents")
+      .is("deleted_at", null)
+      .eq("status", "completed")
+      .gte("appointment_date", week.startISO)
+      .lte("appointment_date", week.endISO),
+
+    // for retention queues (rebooking): recent COMPLETED appointment history only
+    supabase
+      .from("appointments")
+      .select(
+        "client_id, service_id, start_at, status, appointment_price_cents, tip_cents, payment_status",
+      )
+      .is("deleted_at", null)
+      .in("status", ["completed", "no_show", "cancelled"])
+      .order("start_at", { ascending: false })
+      .limit(2000),
+
+    supabase
+      .from("clients")
+      .select("id, first_name, last_name, no_show_count, deposit_required, booking_restricted"),
+
+    // visit memory existence (future-friendly signal; does not change timing yet)
+    supabase
+      .from("appointment_memories")
+      .select("appointment_id, appointments!inner(client_id)")
+      .limit(2000),
+  ]);
+
+  // Revenue totals (completed only; includes price + tip)
+  let todayRevenueCents = 0;
+  let todayCompletedCount = 0;
+  let weekRevenueCents = 0;
+  let weekCompletedCount = 0;
+
+  for (const row of revenueWeekRows ?? []) {
+    const total = (row.appointment_price_cents ?? 0) + (row.tip_cents ?? 0);
+    const dateStr = row.appointment_date;
+    if (!dateStr) continue;
+    weekRevenueCents += total;
+    weekCompletedCount += 1;
+    if (dateStr === todayISO) {
+      todayRevenueCents += total;
+      todayCompletedCount += 1;
+    }
+  }
+
+  // Today's appointment status breakdown
+  const counts = {
+    total: 0,
+    confirmed: 0,
+    completed: 0,
+    cancelled: 0,
+    no_show: 0,
+    checked_in: 0,
+    scheduled: 0,
+  };
+  for (const a of todayAppts ?? []) {
+    counts.total += 1;
+    const s = a.status as string;
+    if (s === "confirmed") counts.confirmed += 1;
+    else if (s === "completed") counts.completed += 1;
+    else if (s === "cancelled") counts.cancelled += 1;
+    else if (s === "no_show") counts.no_show += 1;
+    else if (s === "checked_in") counts.checked_in += 1;
+    else if (s === "scheduled") counts.scheduled += 1;
+  }
+
+  // Stylist utilization snapshot (today)
+  const apptsTodayByStylist = new Map<string, { total: number; completed: number }>();
+  for (const a of todayAppts ?? []) {
+    const sid = a.stylist_id as string | null;
+    if (!sid) continue;
+    const cur = apptsTodayByStylist.get(sid) ?? { total: 0, completed: 0 };
+    cur.total += 1;
+    if (a.status === "completed") cur.completed += 1;
+    apptsTodayByStylist.set(sid, cur);
+  }
+
+  const stylistUtilization = (stylists ?? []).map((s) => {
+    const name = nameFromParts(s.first_name, s.last_name);
+    const stat = apptsTodayByStylist.get(s.id) ?? { total: 0, completed: 0 };
+    return {
+      stylistId: s.id,
+      stylistName: name,
+      appointmentsToday: stat.total,
+      completedToday: stat.completed,
+    };
+  });
+
+  // No-show summary
+  const thisMonthCount = (monthNoShows ?? []).length;
+  const topClients = (topNoShowClients ?? []).map((c) => ({
+    id: c.id,
+    name: nameFromParts(c.first_name, c.last_name),
+    noShowCount: c.no_show_count ?? 0,
+  }));
+
+  // Top services (top 3 by completed count; include revenue if present)
+  const serviceNameById = new Map((services ?? []).map((s) => [s.id, s.name ?? "Unnamed Service"]));
+  const byService = new Map<string, { count: number; revenueCents: number }>();
+  for (const row of completedWeekForServices ?? []) {
+    const sid = row.service_id as string | null;
+    if (!sid) continue;
+    const cur = byService.get(sid) ?? { count: 0, revenueCents: 0 };
+    cur.count += 1;
+    cur.revenueCents += (row.appointment_price_cents ?? 0) + (row.tip_cents ?? 0);
+    byService.set(sid, cur);
+  }
+  const topServices = Array.from(byService.entries())
+    .map(([serviceId, v]) => ({
+      serviceId,
+      serviceName: serviceNameById.get(serviceId) ?? "Unnamed Service",
+      completedCount: v.count,
+      revenueCents: v.revenueCents,
+    }))
+    .sort((a, b) => b.completedCount - a.completedCount)
+    .slice(0, 3);
+
+  // Rebooking intelligence (service-based return window)
+  const clientMap = new Map((clients ?? []).map((c) => [c.id, c]));
+  const serviceMap = new Map((services ?? []).map((s) => [s.id, { name: s.name ?? null }]));
+  const byClientAppointments = new Map<
+    string,
+    {
+      start_at: string;
+      status: string;
+      service_id: string | null;
+      appointment_price_cents?: number | null;
+      tip_cents?: number | null;
+      payment_status?: string | null;
+    }[]
+  >();
+
+  for (const appt of recentCompletedAppointments ?? []) {
+    if (!appt.client_id) continue;
+    const list = byClientAppointments.get(appt.client_id) ?? [];
+    list.push({
+      start_at: appt.start_at,
+      status: appt.status,
+      service_id: appt.service_id,
+      appointment_price_cents: (appt as any).appointment_price_cents ?? null,
+      tip_cents: (appt as any).tip_cents ?? null,
+      payment_status: (appt as any).payment_status ?? null,
+    });
+    byClientAppointments.set(appt.client_id, list);
+  }
+
+  const startOfToday = startOfLocalDay(now);
+
+  const hasMemoryByClientId = new Set<string>();
+  for (const row of memoryJoinRows ?? []) {
+    const clientId = (row as any)?.appointments?.client_id as string | undefined;
+    if (clientId) hasMemoryByClientId.add(clientId);
+  }
+
+  type RetentionRow = {
+    id: string;
+    name: string;
+    lastServiceName: string | null;
+    lastCompletedISO: string;
+    recommendedNextISO: string;
+    recommendedDate: Date;
+    status: "due_soon" | "overdue";
+    hasVisitMemory: boolean;
+  };
+
+  type RebookingClientRow = {
+    id: string;
+    name: string;
+    lastVisitDate: Date;
+    recommendedReturnDate: Date;
+    status: RebookingStatus;
+    daysSinceLastVisit: number;
+    hasVisitMemory: boolean;
+    lastServiceName: string | null;
+    avgVisitFrequencyWeeks?: number | null;
+    reasoning?: string | null;
+  };
+
+  const allRetention: RetentionRow[] = [];
+  const clientsToRebookAll: RebookingClientRow[] = [];
+
+  const intelligenceCounts: Record<ClientCategory, number> = {
+    high_value: 0,
+    regular: 0,
+    at_risk: 0,
+    inactive: 0,
+  };
+
+  const atRiskClientsAll: {
+    id: string;
+    name: string;
+    lastVisitAt: Date | null;
+    recommendedReturnDate: Date | null;
+    totalSpendCents: number;
+    noShowCount: number;
+    cancellationCount: number;
+  }[] = [];
+
+  const highValueClientsAll: {
+    id: string;
+    name: string;
+    lastVisitAt: Date | null;
+    totalSpendCents: number;
+    avgVisitFrequencyDays: number | null;
+    totalVisits: number;
+  }[] = [];
+
+  const processedClientIds = new Set<string>();
+
+  for (const [clientId, appts] of byClientAppointments.entries()) {
+    const client = clientMap.get(clientId);
+    if (!client) continue;
+
+    processedClientIds.add(clientId);
+
+    const decision = computeClientRebookingDecision({
+      appointments: appts,
+      serviceById: serviceMap,
+      today: startOfToday,
+      dueSoonDays: 14,
+      clientRisk: {
+        noShowCount: (client as any)?.no_show_count ?? 0,
+        depositRequired: (client as any)?.deposit_required ?? false,
+        bookingRestricted: (client as any)?.booking_restricted ?? false,
+      },
+    });
+
+    const metrics = computeClientVisitMetrics(appts);
+    const spend = computeClientTotalSpendCents(appts);
+    const classification = classifyClientCategory({
+      now: startOfToday,
+      metrics,
+      rebookingStatus: decision.status,
+      recommendedReturnDate: decision.recommended_date,
+      spendCents: spend.totalSpendCents,
+    });
+
+    intelligenceCounts[classification.category] += 1;
+
+    if (classification.category === "at_risk") {
+      atRiskClientsAll.push({
+        id: clientId,
+        name: nameFromParts(client.first_name, client.last_name),
+        lastVisitAt: metrics.lastVisitAt,
+        recommendedReturnDate: decision.recommended_date,
+        totalSpendCents: spend.totalSpendCents,
+        noShowCount: metrics.noShowCount,
+        cancellationCount: metrics.cancellationCount,
+      });
+    }
+
+    if (classification.category === "high_value") {
+      highValueClientsAll.push({
+        id: clientId,
+        name: nameFromParts(client.first_name, client.last_name),
+        lastVisitAt: metrics.lastVisitAt,
+        totalSpendCents: spend.totalSpendCents,
+        avgVisitFrequencyDays: metrics.avgVisitFrequencyDays,
+        totalVisits: metrics.totalVisits,
+      });
+    }
+
+    // Rebooking queue: only show clients with a concrete recommended return date.
+    if (!decision.last_completed_at || !decision.recommended_date) continue;
+
+    const lastCompletedISO = formatLocalISO(decision.last_completed_at);
+    const recommendedNextISO = formatLocalISO(decision.recommended_date);
+    if (!lastCompletedISO || !recommendedNextISO) continue;
+
+    const hasVisitMemory = hasMemoryByClientId.has(clientId);
+    clientsToRebookAll.push({
+      id: clientId,
+      name: nameFromParts(client.first_name, client.last_name),
+      lastVisitDate: decision.last_completed_at,
+      recommendedReturnDate: decision.recommended_date,
+      status: decision.status,
+      daysSinceLastVisit: decision.days_since_last_visit ?? 0,
+      hasVisitMemory,
+      lastServiceName: decision.last_service_name,
+      avgVisitFrequencyWeeks: decision.avg_visit_frequency_weeks ?? null,
+      reasoning: decision.reasoning ?? null,
+    });
+
+    if (decision.status === "upcoming") continue;
+    const retentionStatus: "due_soon" | "overdue" =
+      decision.status === "due" ? "due_soon" : "overdue";
+
+    allRetention.push({
+      id: clientId,
+      name: nameFromParts(client.first_name, client.last_name),
+      lastServiceName: decision.last_service_name,
+      lastCompletedISO,
+      recommendedNextISO,
+      recommendedDate: decision.recommended_date,
+      status: retentionStatus,
+      hasVisitMemory,
+    });
+  }
+
+  // Clients not present in the fetched appointment history are treated as inactive.
+  for (const [clientId] of clientMap.entries()) {
+    if (!processedClientIds.has(clientId)) {
+      intelligenceCounts.inactive += 1;
+    }
+  }
+
+  const clientsToRebook = clientsToRebookAll
+    .sort((a, b) => {
+      const pri = (s: RebookingStatus) => (s === "overdue" ? 0 : s === "due" ? 1 : 2);
+      const pa = pri(a.status);
+      const pb = pri(b.status);
+      if (pa !== pb) return pa - pb;
+      return a.recommendedReturnDate.getTime() - b.recommendedReturnDate.getTime();
+    })
+    .slice(0, 12)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      lastVisitISO: formatLocalISO(r.lastVisitDate)!,
+      recommendedReturnISO: formatLocalISO(r.recommendedReturnDate)!,
+      status: r.status,
+      daysSinceLastVisit: r.daysSinceLastVisit,
+      avgVisitFrequencyWeeks: r.avgVisitFrequencyWeeks ?? null,
+      reasoning: r.reasoning ?? null,
+    }));
+
+  const overdue = allRetention
+    .filter((r) => r.status === "overdue")
+    .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
+  const dueSoon = allRetention
+    .filter((r) => r.status === "due_soon")
+    .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
+
+  // Opportunities: overdue + due soon within 7 days (inclusive)
+  const opportunityEnd = startOfLocalDay(new Date(startOfToday.getTime()));
+  opportunityEnd.setDate(opportunityEnd.getDate() + 7);
+  const opportunities = allRetention
+    .filter((r) => r.status === "overdue" || r.recommendedDate.getTime() <= opportunityEnd.getTime())
+    .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
+
+  const overdueClients = overdue.slice(0, 8).map((r) => ({
+    id: r.id,
+    name: r.name,
+    lastServiceName: r.lastServiceName,
+    recommendedNextISO: r.recommendedNextISO,
+  }));
+
+  const clientIntelligenceAtRisk = atRiskClientsAll
+    .slice()
+    .sort((a, b) => {
+      const ra = a.recommendedReturnDate ? a.recommendedReturnDate.getTime() : Number.POSITIVE_INFINITY;
+      const rb = b.recommendedReturnDate ? b.recommendedReturnDate.getTime() : Number.POSITIVE_INFINITY;
+      if (ra !== rb) return ra - rb; // earliest return first
+      return b.totalSpendCents - a.totalSpendCents;
+    })
+    .slice(0, 8)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      lastVisitISO: c.lastVisitAt ? formatLocalISO(c.lastVisitAt) : null,
+      recommendedReturnISO: c.recommendedReturnDate ? formatLocalISO(c.recommendedReturnDate) : null,
+      totalSpendCents: c.totalSpendCents,
+      noShowCount: c.noShowCount,
+      cancellationCount: c.cancellationCount,
+    }));
+
+  const clientIntelligenceHighValue = highValueClientsAll
+    .slice()
+    .sort((a, b) => b.totalSpendCents - a.totalSpendCents)
+    .slice(0, 8)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      lastVisitISO: c.lastVisitAt ? formatLocalISO(c.lastVisitAt) : null,
+      totalSpendCents: c.totalSpendCents,
+      avgVisitFrequencyDays: c.avgVisitFrequencyDays ?? null,
+      totalVisits: c.totalVisits,
+    }));
+
+  const gapFillSuggestions = await getGapFillSuggestionsForDate({
+    supabase,
+    dateISO: todayISO,
+    minGapMinutes: 30,
+    retentionClients: opportunities.slice(0, 30).map((r) => ({
+      id: r.id,
+      name: r.name,
+      lastServiceName: r.lastServiceName,
+      status: r.status,
+    })),
+  });
+
+  return {
+    todayISO,
+    week,
+    month,
+    totals: {
+      clients: clientsCount ?? 0,
+      appointments: appointmentsCount ?? 0,
+      services: servicesCount ?? 0,
+      stylists: stylistsCount ?? 0,
+    },
+    revenue: {
+      today: { revenueCents: todayRevenueCents, completedCount: todayCompletedCount },
+      week: { revenueCents: weekRevenueCents, completedCount: weekCompletedCount },
+    },
+    todaysAppointments: counts,
+    overdueClients,
+    rebooking: {
+      clientsToRebook,
+    },
+    clientIntelligence: {
+      counts: intelligenceCounts,
+      atRisk: clientIntelligenceAtRisk,
+      highValue: clientIntelligenceHighValue,
+    },
+    retention: {
+      dueSoonClients: dueSoon.slice(0, 8).map((r) => ({
+        id: r.id,
+        name: r.name,
+        lastServiceName: r.lastServiceName,
+        lastCompletedISO: r.lastCompletedISO,
+        recommendedNextISO: r.recommendedNextISO,
+        status: "due_soon",
+        hasVisitMemory: r.hasVisitMemory,
+      })),
+      overdueClients: overdue.slice(0, 8).map((r) => ({
+        id: r.id,
+        name: r.name,
+        lastServiceName: r.lastServiceName,
+        lastCompletedISO: r.lastCompletedISO,
+        recommendedNextISO: r.recommendedNextISO,
+        status: "overdue",
+        hasVisitMemory: r.hasVisitMemory,
+      })),
+      opportunities: opportunities.slice(0, 10).map((r) => ({
+        id: r.id,
+        name: r.name,
+        lastServiceName: r.lastServiceName,
+        lastCompletedISO: r.lastCompletedISO,
+        recommendedNextISO: r.recommendedNextISO,
+        status: r.status,
+        hasVisitMemory: r.hasVisitMemory,
+      })),
+    },
+    noShows: {
+      thisMonthCount,
+      topClients,
+    },
+    topServices,
+    stylistUtilization,
+    gapFill: {
+      dateISO: todayISO,
+      suggestions: gapFillSuggestions,
+    },
+  };
+}

@@ -90,10 +90,10 @@ async function createAppointment(formData: FormData) {
     throw new Error(error.message);
   }
 
-  redirect("/appointments");
+  redirect(`/dashboard/appointments?date=${appointment_date}`);
 }
 
-export default async function NewAppointmentPage({
+export default async function DashboardNewAppointmentPage({
   searchParams,
 }: {
   searchParams?: Promise<SearchParams>;
@@ -141,11 +141,12 @@ export default async function NewAppointmentPage({
     <main style={mainStyle}>
       <div style={headerWrapStyle}>
         <div>
-          <Link href="/appointments" style={backLinkStyle}>
+          <Link href="/dashboard/appointments" style={backLinkStyle}>
             ← Back to Appointments
           </Link>
 
           <h1 style={titleStyle}>New Appointment</h1>
+
           <p style={subtitleStyle}>
             Create a booking for a client, service, and stylist.
           </p>
@@ -297,7 +298,7 @@ export default async function NewAppointmentPage({
             Create Appointment
           </button>
 
-          <Link href="/appointments" style={secondaryButtonStyle}>
+          <Link href="/dashboard/appointments" style={secondaryButtonStyle}>
             Cancel
           </Link>
         </div>

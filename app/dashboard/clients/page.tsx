@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
+import { computeRebookingInfo } from "@/app/lib/rebooking";
+import { getRebookingStatus } from "@/app/lib/retention";
 
 type Client = {
   id: string;
@@ -9,6 +11,9 @@ type Client = {
   phone: string | null;
   notes: string | null;
   created_at?: string | null;
+  no_show_count?: number | null;
+  last_completed_at?: string | null;
+  last_recommended_date?: string | null;
 };
 
 function notesPreview(notes: string | null) {
@@ -28,7 +33,7 @@ export default async function DashboardClientsPage({
 
   let queryBuilder = supabase
     .from("clients")
-    .select("id, first_name, last_name, email, phone, notes, created_at")
+    .select("id, first_name, last_name, email, phone, notes, created_at, no_show_count")
     .order("first_name", { ascending: true });
 
   if (query) {
@@ -39,6 +44,36 @@ export default async function DashboardClientsPage({
 
   const { data, error } = await queryBuilder;
   const clients = (data ?? []) as Client[];
+
+  const { data: recentAppointments } = await supabase
+    .from("appointments")
+    .select("id, client_id, service_id, start_at, status")
+    .is("deleted_at", null)
+    .order("start_at", { ascending: false })
+    .limit(500);
+
+  const { data: services } = await supabase
+    .from("services")
+    .select("id, name");
+
+  const serviceMap = new Map((services ?? []).map((s) => [s.id, { name: s.name }]));
+
+  const apptsByClient = new Map<
+    string,
+    { start_at: string; status: string; service_id: string | null }[]
+  >();
+  for (const appt of recentAppointments ?? []) {
+    if (!appt.client_id) continue;
+    const list =
+      apptsByClient.get(appt.client_id) ??
+      [];
+    list.push({
+      start_at: appt.start_at,
+      status: appt.status,
+      service_id: appt.service_id,
+    });
+    apptsByClient.set(appt.client_id, list);
+  }
 
   return (
     <main
@@ -223,6 +258,21 @@ export default async function DashboardClientsPage({
             const fullName =
               `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() ||
               "Unnamed Client";
+            const noShowCount = client.no_show_count ?? 0;
+            const hasAppts = apptsByClient.has(client.id);
+            const info = hasAppts
+              ? computeRebookingInfo({
+                  appointments: apptsByClient.get(client.id)!,
+                  serviceById: serviceMap,
+                })
+              : null;
+            const recommendedDate = info?.recommendedDate ?? null;
+            const lastCompletedAt = info?.lastCompletedAt ?? null;
+            const lastServiceName = info?.lastServiceName ?? null;
+            const today = new Date();
+            const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const status = getRebookingStatus({ recommendedDate, today: startOfToday });
+            const showBadge = status !== "not_due" && recommendedDate != null;
 
             return (
               <Link
@@ -246,6 +296,63 @@ export default async function DashboardClientsPage({
                   <h2 style={{ margin: "0 0 10px 0", fontSize: "1.2rem" }}>
                     {fullName}
                   </h2>
+
+                  {noShowCount > 0 && (
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        marginBottom: 8,
+                        padding: "4px 8px",
+                        borderRadius: 999,
+                        background: "#fff7ed",
+                        color: "#9a3412",
+                        fontSize: 11,
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: "999px",
+                          background: "#ea580c",
+                        }}
+                      />
+                      <span>{noShowCount} no-show{noShowCount === 1 ? "" : "s"}</span>
+                    </div>
+                  )}
+
+                  {showBadge && (
+                    <div
+                      style={{
+                        marginBottom: 6,
+                        fontSize: 11,
+                        color: status === "overdue" ? "#b91c1c" : "#92400e",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {status === "overdue" ? "Overdue · " : "Due soon · "}
+                      {recommendedDate!.toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                      {lastServiceName ? ` · ${lastServiceName}` : ""}
+                    </div>
+                  )}
+
+                  {lastCompletedAt && (
+                    <div style={{ marginBottom: 8, fontSize: 12, color: "#555" }}>
+                      Last completed:{" "}
+                      {lastCompletedAt.toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </div>
+                  )}
 
                   <p style={lineStyle}>
                     <strong>Email:</strong> {client.email || "—"}

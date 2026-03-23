@@ -1,10 +1,11 @@
 import { createSupabaseServerClient } from "./supabaseServer";
+import type { AppRole } from "./roles";
 
 export type CurrentUserProfile = {
   id: string | null;
   email: string | null;
   full_name: string | null;
-  role: string;
+  role: AppRole;
   salon_id: string | null;
   location_id: string | null;
 };
@@ -12,8 +13,10 @@ export type CurrentUserProfile = {
 function normalizeRole(role: string | null | undefined) {
   if (!role) return "guest";
 
-  const validRoles = ["owner", "manager", "receptionist", "stylist", "assistant", "guest"];
-  return validRoles.includes(role) ? role : "guest";
+  // Supabase `profiles.role` may contain legacy role names. We normalize into
+  // the app's `AppRole` union so dashboard gating works reliably.
+  const validRoles: AppRole[] = ["guest", "stylist", "manager", "admin"];
+  return (validRoles.includes(role as AppRole) ? (role as AppRole) : "guest") as AppRole;
 }
 
 export async function getCurrentUserWithProfile(): Promise<CurrentUserProfile | null> {

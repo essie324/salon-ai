@@ -53,6 +53,8 @@ export const DASHBOARD_NAV: NavItem[] = [
   { label: "Appointments", href: "/dashboard/appointments", roles: ALL_ROLES },
   { label: "Clients", href: "/dashboard/clients", roles: ["stylist", "manager", "admin"] },
   { label: "Services", href: "/dashboard/services", roles: ["manager", "admin"] },
+  { label: "Stylists", href: "/dashboard/stylists", roles: ["manager", "admin"] },
+  { label: "Strategy", href: "/dashboard/strategy", roles: ["admin"] },
   { label: "Earnings", href: "/dashboard/earnings", roles: ["stylist", "manager", "admin"] },
   { label: "Goals", href: "/dashboard/goals", roles: ["stylist", "manager", "admin"] },
   { label: "Rewards", href: "/dashboard/rewards", roles: ["stylist", "manager", "admin"] },

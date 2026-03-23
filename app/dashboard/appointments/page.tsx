@@ -1,228 +1,720 @@
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
-import { DayScheduler } from "@/app/components/calendar/DayScheduler";
-import type { StylistForScheduler, AppointmentForScheduler } from "@/app/components/calendar/DayScheduler";
+import { localDateISO } from "@/app/lib/dashboard/dateRanges";
+import { normalizeAppointmentDate } from "@/app/lib/appointmentLocalTime";
 
-type Appointment = {
-  id: string;
-  start_at: string;
-  end_at: string | null;
-  status: string;
-  client_id: string | null;
-  service_id: string | null;
-  stylist_id: string | null;
+type SearchParams = {
+  date?: string;
+  status?: string;
+  stylistId?: string;
+  showArchived?: string;
 };
 
-type Client = {
+type AppointmentRow = {
+  id: string;
+  appointment_date: string | null;
+  appointment_time: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  status: string | null;
+  notes: string | null;
+  service_goal: string | null;
+  payment_status: string | null;
+  deposit_required: boolean | null;
+  deposit_status: string | null;
+  appointment_price_cents: number | null;
+  tip_cents: number | null;
+  deleted_at: string | null;
+  client_id: string | null;
+  stylist_id: string | null;
+  service_id: string | null;
+};
+
+type ClientRow = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  no_show_count: number | null;
+};
+
+type StylistRow = {
   id: string;
   first_name: string | null;
   last_name: string | null;
 };
 
-type Service = {
+type ServiceRow = {
   id: string;
   name: string | null;
   duration_minutes: number | null;
+  price_cents: number | null;
 };
 
-type Stylist = {
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-};
+function formatMoney(cents: number | null | undefined) {
+  if (cents == null) return "—";
+  return `$${(cents / 100).toFixed(2)}`;
+}
 
-function getTodayISO(): string {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
+function formatName(first: string | null | undefined, last: string | null | undefined) {
+  return `${first ?? ""} ${last ?? ""}`.trim() || "Unnamed";
+}
+
+function statusColor(status: string | null | undefined): string {
+  switch (status) {
+    case "confirmed":
+      return "#2563eb";
+    case "checked_in":
+      return "#ea580c";
+    case "completed":
+      return "#16a34a";
+    case "cancelled":
+      return "#6b7280";
+    case "no_show":
+      return "#dc2626";
+    default:
+      return "#374151";
+  }
+}
+
+function paymentBadgeColor(status: string | null | undefined): string {
+  switch (status) {
+    case "paid":
+      return "#166534";
+    case "refunded":
+      return "#7c2d12";
+    case "comped":
+      return "#4c1d95";
+    default:
+      return "#374151";
+  }
 }
 
 export default async function DashboardAppointmentsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ date?: string }>;
+  searchParams?: Promise<SearchParams>;
 }) {
+  const params = (await searchParams) ?? {};
+  /** Day view is keyed by stored `appointment_date` (calendar), not `start_at` UTC instant. */
+  const selectedDate =
+    normalizeAppointmentDate(params.date ?? "") ?? localDateISO();
+  const selectedStatus = params.status || "";
+  const selectedStylistId = params.stylistId || "";
+  const showArchived = params.showArchived === "true";
+
   const supabase = await createSupabaseServerClient();
-  const resolved = await searchParams;
-  const dateParam = resolved?.date?.trim();
-  const selectedDate = dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : getTodayISO();
+
+  // List view: filter by calendar `appointment_date` only (not `start_at`), so it matches the booking form.
+  let appointmentsQuery = supabase
+    .from("appointments")
+    .select(
+      "id, appointment_date, appointment_time, start_at, end_at, status, notes, service_goal, payment_status, deposit_required, deposit_status, appointment_price_cents, tip_cents, deleted_at, client_id, stylist_id, service_id"
+    )
+    .eq("appointment_date", selectedDate)
+    .order("appointment_time", { ascending: true });
+
+  if (selectedStatus) {
+    appointmentsQuery = appointmentsQuery.eq("status", selectedStatus);
+  }
+
+  if (selectedStylistId) {
+    appointmentsQuery = appointmentsQuery.eq("stylist_id", selectedStylistId);
+  }
+
+  if (showArchived) {
+    appointmentsQuery = appointmentsQuery.not("deleted_at", "is", null);
+  } else {
+    appointmentsQuery = appointmentsQuery.is("deleted_at", null);
+  }
 
   const [
-    { data: appointments, error: appointmentsError },
-    { data: clients },
-    { data: services },
-    { data: stylists },
+    { data: appointmentsData, error: appointmentsError },
+    { data: clientsData, error: clientsError },
+    { data: stylistsData, error: stylistsError },
+    { data: servicesData, error: servicesError },
   ] = await Promise.all([
+    appointmentsQuery,
     supabase
-      .from("appointments")
-      .select("id, start_at, end_at, status, client_id, service_id, stylist_id")
-      .eq("appointment_date", selectedDate)
-      .order("start_at", { ascending: true }),
-    supabase.from("clients").select("id, first_name, last_name"),
-    supabase.from("services").select("id, name, duration_minutes"),
+      .from("clients")
+      .select("id, first_name, last_name, no_show_count"),
     supabase
       .from("stylists")
       .select("id, first_name, last_name")
       .eq("is_active", true)
       .order("first_name", { ascending: true }),
+    supabase
+      .from("services")
+      .select("id, name, duration_minutes, price_cents")
+      .order("name", { ascending: true }),
   ]);
 
-  const appointmentList = (appointments ?? []) as Appointment[];
-  const clientList = (clients ?? []) as Client[];
-  const serviceList = (services ?? []) as Service[];
-  const stylistList = (stylists ?? []) as Stylist[];
+  if (appointmentsError) {
+    return (
+      <main style={mainStyle}>
+        <div style={headerRowStyle}>
+          <div>
+            <Link href="/dashboard" style={backLinkStyle}>
+              ← Back to Dashboard
+            </Link>
+            <h1 style={titleStyle}>Appointments</h1>
+          </div>
+        </div>
+        <div style={errorBoxStyle}>
+          Error loading appointments: {appointmentsError.message}
+        </div>
+      </main>
+    );
+  }
 
-  const clientMap = new Map(clientList.map((c) => [c.id, c]));
-  const serviceMap = new Map(serviceList.map((s) => [s.id, s]));
+  if (clientsError) {
+    return (
+      <main style={mainStyle}>
+        <div style={errorBoxStyle}>Error loading clients: {clientsError.message}</div>
+      </main>
+    );
+  }
 
-  const enrichedAppointments: AppointmentForScheduler[] = appointmentList.map((appt) => {
-    const client = appt.client_id ? clientMap.get(appt.client_id) : null;
-    const service = appt.service_id ? serviceMap.get(appt.service_id) : null;
-    const clientName =
-      client && `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
-        ? `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
-        : "Unknown";
-    return {
-      id: appt.id,
-      start_at: appt.start_at,
-      end_at: appt.end_at,
-      status: appt.status,
-      stylist_id: appt.stylist_id,
-      clientName,
-      serviceName: service?.name ?? "—",
-      durationMinutes: service?.duration_minutes ?? undefined,
-    };
-  });
+  if (stylistsError) {
+    return (
+      <main style={mainStyle}>
+        <div style={errorBoxStyle}>Error loading stylists: {stylistsError.message}</div>
+      </main>
+    );
+  }
 
-  const stylistsForScheduler: StylistForScheduler[] = stylistList;
+  if (servicesError) {
+    return (
+      <main style={mainStyle}>
+        <div style={errorBoxStyle}>Error loading services: {servicesError.message}</div>
+      </main>
+    );
+  }
 
-  const dateLabel = new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
+  const appointments = (appointmentsData ?? []) as AppointmentRow[];
+  const clients = (clientsData ?? []) as ClientRow[];
+  const stylists = (stylistsData ?? []) as StylistRow[];
+  const services = (servicesData ?? []) as ServiceRow[];
+
+  const clientMap = new Map(
+    clients.map((client) => [
+      client.id,
+      {
+        name: formatName(client.first_name, client.last_name),
+        noShowCount: client.no_show_count ?? 0,
+      },
+    ])
+  );
+
+  const stylistMap = new Map(
+    stylists.map((stylist) => [
+      stylist.id,
+      formatName(stylist.first_name, stylist.last_name),
+    ])
+  );
+
+  const serviceMap = new Map(
+    services.map((service) => [
+      service.id,
+      {
+        name: service.name ?? "Unnamed Service",
+        duration: service.duration_minutes,
+        price: service.price_cents,
+      },
+    ])
+  );
+
+  const totals = appointments.reduce(
+    (acc, appt) => {
+      acc.total += 1;
+      if (appt.status === "confirmed") acc.confirmed += 1;
+      if (appt.status === "completed") acc.completed += 1;
+      if (appt.status === "cancelled") acc.cancelled += 1;
+      if (appt.status === "no_show") acc.noShow += 1;
+      return acc;
+    },
+    { total: 0, confirmed: 0, completed: 0, cancelled: 0, noShow: 0 }
+  );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 16,
-          flexWrap: "wrap",
-        }}
-      >
+    <main style={mainStyle}>
+      <div style={headerRowStyle}>
         <div>
-          <Link
-            href="/dashboard"
-            style={{
-              textDecoration: "none",
-              fontWeight: 700,
-              color: "#111",
-              display: "inline-block",
-              marginBottom: 8,
-            }}
-          >
+          <Link href="/dashboard" style={backLinkStyle}>
             ← Back to Dashboard
           </Link>
-          <h1 style={{ fontSize: "1.75rem", margin: "0 0 4px 0" }}>Appointments</h1>
-          <p style={{ margin: 0, color: "#666", fontSize: 14 }}>
-            Day view · 8:00 – 18:00 · 30-min slots
+          <h1 style={titleStyle}>Appointments</h1>
+          <p style={subtitleStyle}>
+            Daily booking view with filters, payment signals, and appointment detail access.
           </p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <form method="get" action="/dashboard/appointments" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label htmlFor="date" style={{ fontSize: 14, fontWeight: 600, color: "#333" }}>
-              Date
-            </label>
-            <input
-              id="date"
-              name="date"
-              type="date"
-              defaultValue={selectedDate}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 10,
-                border: "1px solid #d8d8d8",
-                fontSize: 14,
-              }}
-            />
-            <button
-              type="submit"
-              style={{
-                padding: "8px 14px",
-                borderRadius: 10,
-                border: "1px solid #111",
-                background: "#111",
-                color: "#fff",
-                fontWeight: 600,
-                fontSize: 14,
-                cursor: "pointer",
-              }}
-            >
-              Go
-            </button>
-          </form>
-          <Link
-            href="/dashboard/appointments/new"
-            style={{
-              display: "inline-block",
-              textDecoration: "none",
-              padding: "10px 16px",
-              borderRadius: 12,
-              background: "#111",
-              color: "#fff",
-              fontWeight: 700,
-              whiteSpace: "nowrap",
-              fontSize: 14,
-            }}
-          >
+        <div style={headerActionsStyle}>
+          <Link href="/dashboard/appointments/new" style={primaryButtonStyle}>
             Create Appointment
           </Link>
         </div>
       </div>
 
-      {appointmentsError && (
-        <div
-          style={{
-            background: "#ffe5e5",
-            color: "#900",
-            padding: 16,
-            borderRadius: 12,
-          }}
-        >
-          Error loading appointments: {appointmentsError.message}
+      <form method="get" action="/dashboard/appointments" style={filterCardStyle}>
+        <div style={filterGridStyle}>
+          <div>
+            <label style={labelStyle}>Date</label>
+            <input type="date" name="date" defaultValue={selectedDate} style={inputStyle} />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Status</label>
+            <select name="status" defaultValue={selectedStatus} style={inputStyle}>
+              <option value="">All statuses</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="checked_in">Checked In</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="no_show">No Show</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Stylist</label>
+            <select name="stylistId" defaultValue={selectedStylistId} style={inputStyle}>
+              <option value="">All stylists</option>
+              {stylists.map((stylist) => (
+                <option key={stylist.id} value={stylist.id}>
+                  {formatName(stylist.first_name, stylist.last_name)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Archived</label>
+            <select
+              name="showArchived"
+              defaultValue={showArchived ? "true" : "false"}
+              style={inputStyle}
+            >
+              <option value="false">Active only</option>
+              <option value="true">Archived only</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={buttonRowStyle}>
+          <button type="submit" style={primarySubmitStyle}>
+            Apply Filters
+          </button>
+
+          <Link href="/dashboard/appointments" style={secondaryButtonStyle}>
+            Reset
+          </Link>
+        </div>
+      </form>
+
+      <div style={statsGridStyle}>
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Appointments</div>
+          <div style={statValueStyle}>{totals.total}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Confirmed</div>
+          <div style={statValueStyle}>{totals.confirmed}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Completed</div>
+          <div style={statValueStyle}>{totals.completed}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Cancelled</div>
+          <div style={statValueStyle}>{totals.cancelled}</div>
+        </div>
+
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>No Shows</div>
+          <div style={statValueStyle}>{totals.noShow}</div>
+        </div>
+      </div>
+
+      {appointments.length === 0 ? (
+        <div style={emptyCardStyle}>
+          No appointments found for this view.
+        </div>
+      ) : (
+        <div style={listWrapStyle}>
+          {appointments.map((appt) => {
+            const client = appt.client_id ? clientMap.get(appt.client_id) : null;
+            const stylistName = appt.stylist_id ? stylistMap.get(appt.stylist_id) : null;
+            const service = appt.service_id ? serviceMap.get(appt.service_id) : null;
+            const totalRevenue =
+              (appt.appointment_price_cents ?? service?.price ?? 0) + (appt.tip_cents ?? 0);
+
+            return (
+              <Link
+                key={appt.id}
+                href={`/dashboard/appointments/${appt.id}`}
+                style={cardLinkStyle}
+              >
+                <div style={appointmentCardStyle}>
+                  <div style={appointmentTopRowStyle}>
+                    <div>
+                      <div style={appointmentTitleStyle}>
+                        {client?.name ?? "Unknown Client"}
+                      </div>
+                      <div style={metaTextStyle}>
+                        {appt.appointment_time || "—"} • {service?.name ?? "Unknown Service"}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        ...statusBadgeStyle,
+                        color: statusColor(appt.status),
+                        borderColor: `${statusColor(appt.status)}33`,
+                        background: `${statusColor(appt.status)}12`,
+                      }}
+                    >
+                      {appt.status ?? "scheduled"}
+                    </div>
+                  </div>
+
+                  <div style={detailsGridStyle}>
+                    <div>
+                      <div style={smallLabelStyle}>Stylist</div>
+                      <div>{stylistName ?? "—"}</div>
+                    </div>
+
+                    <div>
+                      <div style={smallLabelStyle}>Duration</div>
+                      <div>{service?.duration != null ? `${service.duration} min` : "—"}</div>
+                    </div>
+
+                    <div>
+                      <div style={smallLabelStyle}>Service Price</div>
+                      <div>{formatMoney(appt.appointment_price_cents ?? service?.price)}</div>
+                    </div>
+
+                    <div>
+                      <div style={smallLabelStyle}>Tip</div>
+                      <div>{formatMoney(appt.tip_cents)}</div>
+                    </div>
+
+                    <div>
+                      <div style={smallLabelStyle}>Total</div>
+                      <div>{formatMoney(totalRevenue)}</div>
+                    </div>
+
+                    <div>
+                      <div style={smallLabelStyle}>Payment</div>
+                      <div
+                        style={{
+                          ...inlineBadgeStyle,
+                          color: paymentBadgeColor(appt.payment_status),
+                          borderColor: `${paymentBadgeColor(appt.payment_status)}33`,
+                          background: `${paymentBadgeColor(appt.payment_status)}12`,
+                        }}
+                      >
+                        {appt.payment_status ?? "unpaid"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={footerRowStyle}>
+                    {appt.deposit_required ? (
+                      <span style={miniWarningStyle}>
+                        Deposit: {appt.deposit_status ?? "required"}
+                      </span>
+                    ) : (
+                      <span style={miniNeutralStyle}>No deposit required</span>
+                    )}
+
+                    {(client?.noShowCount ?? 0) > 0 ? (
+                      <span style={miniDangerStyle}>
+                        {client?.noShowCount} no-show{client?.noShowCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {appt.notes ? (
+                    <div style={notesPreviewStyle}>
+                      {appt.notes.length > 120 ? `${appt.notes.slice(0, 120)}…` : appt.notes}
+                    </div>
+                  ) : null}
+                </div>
+              </Link>
+            );
+          })}
         </div>
       )}
-
-      {!appointmentsError && (
-        <>
-          <p style={{ margin: 0, fontSize: 14, color: "#666", fontWeight: 600 }}>
-            {dateLabel}
-          </p>
-          {stylistList.length === 0 ? (
-            <div
-              style={{
-                background: "#fff",
-                border: "1px solid #e5e5e5",
-                borderRadius: 16,
-                padding: 24,
-                boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
-              }}
-            >
-              <p style={{ margin: 0 }}>No active stylists. Add stylists to see the schedule.</p>
-            </div>
-          ) : (
-            <DayScheduler
-              date={selectedDate}
-              stylists={stylistsForScheduler}
-              appointments={enrichedAppointments}
-            />
-          )}
-        </>
-      )}
-    </div>
+    </main>
   );
 }
+
+const mainStyle: CSSProperties = {
+  padding: 40,
+  maxWidth: 1200,
+  margin: "0 auto",
+  fontFamily: "Arial, sans-serif",
+};
+
+const headerRowStyle: CSSProperties = {
+  marginBottom: 24,
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 16,
+  flexWrap: "wrap",
+};
+
+const headerActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: 12,
+  flexWrap: "wrap",
+};
+
+const backLinkStyle: CSSProperties = {
+  textDecoration: "none",
+  fontWeight: 700,
+  color: "#111",
+};
+
+const titleStyle: CSSProperties = {
+  margin: "12px 0 8px 0",
+  fontSize: "2.1rem",
+};
+
+const subtitleStyle: CSSProperties = {
+  margin: 0,
+  color: "#666",
+};
+
+const filterCardStyle: CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e5e5",
+  borderRadius: 16,
+  padding: 20,
+  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+  display: "grid",
+  gap: 16,
+  marginBottom: 22,
+};
+
+const filterGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 16,
+};
+
+const labelStyle: CSSProperties = {
+  display: "block",
+  marginBottom: 6,
+  fontWeight: 700,
+};
+
+const inputStyle: CSSProperties = {
+  width: "100%",
+  padding: 10,
+  borderRadius: 8,
+  border: "1px solid #ccc",
+  boxSizing: "border-box",
+};
+
+const buttonRowStyle: CSSProperties = {
+  display: "flex",
+  gap: 12,
+  flexWrap: "wrap",
+};
+
+const primaryButtonStyle: CSSProperties = {
+  display: "inline-block",
+  textDecoration: "none",
+  background: "#111",
+  color: "#fff",
+  padding: "12px 16px",
+  borderRadius: 10,
+  border: "none",
+  fontWeight: 700,
+};
+
+const primarySubmitStyle: CSSProperties = {
+  background: "#111",
+  color: "#fff",
+  padding: "12px 16px",
+  borderRadius: 10,
+  border: "none",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const secondaryButtonStyle: CSSProperties = {
+  display: "inline-block",
+  textDecoration: "none",
+  background: "#fff",
+  color: "#111",
+  padding: "12px 16px",
+  borderRadius: 10,
+  border: "1px solid #ccc",
+  fontWeight: 700,
+};
+
+const statsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: 14,
+  marginBottom: 22,
+};
+
+const statCardStyle: CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e5e5",
+  borderRadius: 14,
+  padding: 16,
+  boxShadow: "0 2px 10px rgba(0,0,0,0.04)",
+};
+
+const statLabelStyle: CSSProperties = {
+  color: "#666",
+  fontWeight: 700,
+  marginBottom: 8,
+  fontSize: 13,
+};
+
+const statValueStyle: CSSProperties = {
+  fontSize: 24,
+  fontWeight: 800,
+  color: "#111",
+};
+
+const emptyCardStyle: CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e5e5",
+  borderRadius: 16,
+  padding: 24,
+  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+};
+
+const listWrapStyle: CSSProperties = {
+  display: "grid",
+  gap: 16,
+};
+
+const cardLinkStyle: CSSProperties = {
+  textDecoration: "none",
+  color: "inherit",
+};
+
+const appointmentCardStyle: CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e5e5",
+  borderRadius: 16,
+  padding: 18,
+  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+  display: "grid",
+  gap: 14,
+};
+
+const appointmentTopRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
+  flexWrap: "wrap",
+};
+
+const appointmentTitleStyle: CSSProperties = {
+  fontSize: 18,
+  fontWeight: 800,
+  color: "#111",
+};
+
+const metaTextStyle: CSSProperties = {
+  color: "#666",
+  marginTop: 4,
+};
+
+const statusBadgeStyle: CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 999,
+  border: "1px solid #ddd",
+  fontWeight: 700,
+  fontSize: 12,
+  textTransform: "capitalize",
+};
+
+const detailsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: 12,
+};
+
+const smallLabelStyle: CSSProperties = {
+  fontSize: 12,
+  color: "#666",
+  marginBottom: 4,
+  fontWeight: 700,
+};
+
+const inlineBadgeStyle: CSSProperties = {
+  display: "inline-block",
+  padding: "4px 8px",
+  borderRadius: 999,
+  border: "1px solid #ddd",
+  fontWeight: 700,
+  fontSize: 12,
+  textTransform: "capitalize",
+};
+
+const footerRowStyle: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const miniWarningStyle: CSSProperties = {
+  display: "inline-block",
+  background: "#fff7ed",
+  color: "#c2410c",
+  border: "1px solid #fdba74",
+  borderRadius: 999,
+  padding: "5px 9px",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const miniDangerStyle: CSSProperties = {
+  display: "inline-block",
+  background: "#fef2f2",
+  color: "#b91c1c",
+  border: "1px solid #fca5a5",
+  borderRadius: 999,
+  padding: "5px 9px",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const miniNeutralStyle: CSSProperties = {
+  display: "inline-block",
+  background: "#f9fafb",
+  color: "#374151",
+  border: "1px solid #d1d5db",
+  borderRadius: 999,
+  padding: "5px 9px",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const notesPreviewStyle: CSSProperties = {
+  color: "#555",
+  fontSize: 14,
+  lineHeight: 1.5,
+};
+
+const errorBoxStyle: CSSProperties = {
+  background: "#ffe5e5",
+  color: "#900",
+  padding: 16,
+  borderRadius: 12,
+};
