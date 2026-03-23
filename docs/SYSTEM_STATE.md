@@ -39,10 +39,14 @@
 
 ---
 
+## Feature flags
+
+- `app/lib/featureFlags.ts` — `FEATURE_INBOX_AND_INTAKE_DB` gates inbox, client “Recent Intake Context”, and `/api/ai/receptionist`. See `docs/FEATURE_FLAGS.md`.
+
 ## Known Gaps (Future Work)
 
-- intake_sessions not implemented
-- AI intake flow not implemented
+- intake_sessions / chat_messages (migrations may exist; enable flag when DB is ready)
+- AI intake flow (stub inbox until re-enabled)
 - retention automation not implemented
 - notifications/reminders not implemented
 - photo upload (storage) not implemented (URL only)

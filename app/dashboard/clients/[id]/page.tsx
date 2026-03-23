@@ -8,6 +8,7 @@ import { classifyClientCategory } from "@/app/lib/clients/intelligence/classifyC
 import type { ClientCategory } from "@/app/lib/clients/intelligence/types";
 import { hasAnyVisitMemory, type AppointmentMemory } from "@/app/lib/visitMemory";
 import { computeClientBehaviorPatterns } from "@/app/lib/clients/patterns";
+import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
 
 type Client = {
   id: string;
@@ -95,7 +96,7 @@ export default async function DashboardClientDetailPage({
     { data: services },
     { data: stylists },
     { data: memories },
-    { data: intakeSessions },
+    intakeRes,
   ] = await Promise.all([
     supabase
       .from("clients")
@@ -120,14 +121,16 @@ export default async function DashboardClientDetailPage({
         "id, appointment_id, formula_notes, developer_notes, technique_notes, processing_notes, aftercare_notes, photo_urls, created_at, appointments!inner(client_id)",
       )
       .eq("appointments.client_id", id),
-    supabase
-      .from("intake_sessions")
-      .select(
-        "id, source, requested_service, requested_stylist, timing_preference, budget_notes, concern_notes, ai_summary, appointment_id, created_at",
-      )
-      .eq("client_id", id)
-      .order("created_at", { ascending: false })
-      .limit(5),
+    FEATURE_INBOX_AND_INTAKE_DB
+      ? supabase
+          .from("intake_sessions")
+          .select(
+            "id, source, requested_service, requested_stylist, timing_preference, budget_notes, concern_notes, ai_summary, appointment_id, created_at",
+          )
+          .eq("client_id", id)
+          .order("created_at", { ascending: false })
+          .limit(5)
+      : Promise.resolve({ data: [] as unknown[], error: null }),
   ]);
 
   if (clientError) {
@@ -162,7 +165,7 @@ export default async function DashboardClientDetailPage({
   const serviceList = (services ?? []) as Service[];
   const stylistList = (stylists ?? []) as Stylist[];
   const memoryList = (memories ?? []) as unknown as AppointmentMemory[];
-  const intakeList = (intakeSessions ?? []) as {
+  const intakeList = (intakeRes.data ?? []) as {
     id: string;
     source: string | null;
     requested_service: string | null;
@@ -708,65 +711,67 @@ export default async function DashboardClientDetailPage({
             )}
           </div>
 
-          <div style={{ marginTop: 18 }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Recent Intake Context</h3>
-            <p style={{ margin: "0 0 10px 0", fontSize: 13, color: "#555" }}>
-              Request context (what the guest asked for). Kept separate from appointment facts.
-            </p>
-            {intakeList.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 14, color: "#555" }}>
-                No intake sessions yet.
+          {FEATURE_INBOX_AND_INTAKE_DB ? (
+            <div style={{ marginTop: 18 }}>
+              <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Recent Intake Context</h3>
+              <p style={{ margin: "0 0 10px 0", fontSize: 13, color: "#555" }}>
+                Request context (what the guest asked for). Kept separate from appointment facts.
               </p>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {intakeList.map((s) => (
-                  <div
-                    key={s.id}
-                    style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: "1px solid #eee",
-                      background: "#fff",
-                    }}
-                  >
-                    <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                      {new Date(s.created_at).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                      {s.source ? ` · ${s.source}` : ""}
-                      {s.appointment_id ? " · linked to appointment" : ""}
-                    </div>
-
-                    {s.ai_summary?.trim() ? (
-                      <div style={{ marginBottom: 8, fontSize: 14, whiteSpace: "pre-wrap" }}>
-                        {s.ai_summary}
+              {intakeList.length === 0 ? (
+                <p style={{ margin: 0, fontSize: 14, color: "#555" }}>
+                  No intake sessions yet.
+                </p>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {intakeList.map((s) => (
+                    <div
+                      key={s.id}
+                      style={{
+                        padding: 12,
+                        borderRadius: 12,
+                        border: "1px solid #eee",
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+                        {new Date(s.created_at).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                        {s.source ? ` · ${s.source}` : ""}
+                        {s.appointment_id ? " · linked to appointment" : ""}
                       </div>
-                    ) : null}
 
-                    <div style={{ fontSize: 13, color: "#333", display: "grid", gap: 4 }}>
-                      {s.requested_service?.trim() ? (
-                        <div><strong>Requested service:</strong> {s.requested_service}</div>
+                      {s.ai_summary?.trim() ? (
+                        <div style={{ marginBottom: 8, fontSize: 14, whiteSpace: "pre-wrap" }}>
+                          {s.ai_summary}
+                        </div>
                       ) : null}
-                      {s.requested_stylist?.trim() ? (
-                        <div><strong>Requested stylist:</strong> {s.requested_stylist}</div>
-                      ) : null}
-                      {s.timing_preference?.trim() ? (
-                        <div><strong>Timing preference:</strong> {s.timing_preference}</div>
-                      ) : null}
-                      {s.budget_notes?.trim() ? (
-                        <div><strong>Budget:</strong> {s.budget_notes}</div>
-                      ) : null}
-                      {s.concern_notes?.trim() ? (
-                        <div><strong>Concerns:</strong> {s.concern_notes}</div>
-                      ) : null}
+
+                      <div style={{ fontSize: 13, color: "#333", display: "grid", gap: 4 }}>
+                        {s.requested_service?.trim() ? (
+                          <div><strong>Requested service:</strong> {s.requested_service}</div>
+                        ) : null}
+                        {s.requested_stylist?.trim() ? (
+                          <div><strong>Requested stylist:</strong> {s.requested_stylist}</div>
+                        ) : null}
+                        {s.timing_preference?.trim() ? (
+                          <div><strong>Timing preference:</strong> {s.timing_preference}</div>
+                        ) : null}
+                        {s.budget_notes?.trim() ? (
+                          <div><strong>Budget:</strong> {s.budget_notes}</div>
+                        ) : null}
+                        {s.concern_notes?.trim() ? (
+                          <div><strong>Concerns:</strong> {s.concern_notes}</div>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
         </section>
 
         <section style={cardStyle}>
