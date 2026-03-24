@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import {
   TimeColumn,
   CALENDAR_ROW_HEIGHT,
@@ -9,34 +10,25 @@ import {
   CALENDAR_SLOT_MINUTES,
 } from "./TimeColumn";
 import { AppointmentBlock } from "./AppointmentBlock";
-import { useState, useCallback, useEffect, useRef } from "react";
+import { formatSchedulerTimeRange } from "@/app/lib/calendar/schedulerData";
 
 const ROW_HEIGHT = CALENDAR_ROW_HEIGHT;
-
-function formatTimeRange(startIso: string, endIso: string | null): string {
-  const start = new Date(startIso);
-  const startTime = start.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  if (!endIso) return startTime;
-  const end = new Date(endIso);
-  const endTime = end.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `${startTime} – ${endTime}`;
-}
 
 function getRowFromStart(startIso: string): number {
   const d = new Date(startIso);
   const hour = d.getHours();
   const minute = d.getMinutes();
-  const row = (hour - CALENDAR_DAY_START) * (60 / CALENDAR_SLOT_MINUTES) + Math.floor(minute / CALENDAR_SLOT_MINUTES);
+  const row =
+    (hour - CALENDAR_DAY_START) * (60 / CALENDAR_SLOT_MINUTES) +
+    Math.floor(minute / CALENDAR_SLOT_MINUTES);
   return Math.max(0, Math.min(CALENDAR_ROW_COUNT - 1, row));
 }
 
-function getSpanFromDuration(startIso: string, endIso: string | null, fallbackMinutes: number): number {
+function getSpanFromDuration(
+  startIso: string,
+  endIso: string | null,
+  fallbackMinutes: number,
+): number {
   if (endIso) {
     const start = new Date(startIso).getTime();
     const end = new Date(endIso).getTime();
@@ -47,7 +39,8 @@ function getSpanFromDuration(startIso: string, endIso: string | null, fallbackMi
 }
 
 function timeForRow(rowIndex: number): string {
-  const totalMinutes = CALENDAR_DAY_START * 60 + rowIndex * CALENDAR_SLOT_MINUTES;
+  const totalMinutes =
+    CALENDAR_DAY_START * 60 + rowIndex * CALENDAR_SLOT_MINUTES;
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
@@ -86,16 +79,7 @@ type DaySchedulerProps = {
   appointments: AppointmentForScheduler[];
 };
 
-type DraggedAppointment = {
-  id: string;
-  durationMinutes: number;
-  fromStylistId: string | null;
-};
-
 export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps) {
-  const [dragged, setDragged] = useState<DraggedAppointment | null>(null);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState<Date | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{
     stylistId: string;
@@ -104,53 +88,6 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
   const rootRef = useRef<HTMLDivElement | null>(null);
   const isToday = getLocalTodayISO() === date;
 
-  const handleDropOnSlot = useCallback(
-    async (stylistId: string, rowIndex: number) => {
-      if (!dragged || isUpdating) return;
-      const time = timeForRow(rowIndex); // HH:mm
-      const durationMinutes = dragged.durationMinutes || 60;
-
-      try {
-        setIsUpdating(true);
-        setError(null);
-        const res = await fetch("/api/appointments/reschedule", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            id: dragged.id,
-            stylistId,
-            date,
-            time,
-            durationMinutes,
-          }),
-        });
-
-        if (!res.ok) {
-          setError("This time slot is not available.");
-          return;
-        }
-
-        const data = await res.json();
-        if (!data.ok) {
-          setError("This time slot is not available.");
-          return;
-        }
-
-        // Reload to reflect updated schedule
-        window.location.reload();
-      } catch {
-        setError("This time slot is not available.");
-      } finally {
-        setIsUpdating(false);
-        setDragged(null);
-      }
-    },
-    [dragged, date, isUpdating]
-  );
-
-  // Keep "now" roughly in sync for the current-time indicator.
   useEffect(() => {
     if (!isToday) return;
     setNow(new Date());
@@ -160,12 +97,10 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
     return () => clearInterval(id);
   }, [isToday]);
 
-  // Auto-scroll the page so the relevant time is near the viewport.
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
-    // Only run on mount / date change
     const rect = root.getBoundingClientRect();
     const pageTop = window.scrollY + rect.top;
 
@@ -176,13 +111,9 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
         current.getHours() * 60 + current.getMinutes() - CALENDAR_DAY_START * 60;
       targetMinutesFromStart = Math.max(
         0,
-        Math.min(
-          CALENDAR_ROW_COUNT * CALENDAR_SLOT_MINUTES,
-          minutes,
-        ),
+        Math.min(CALENDAR_ROW_COUNT * CALENDAR_SLOT_MINUTES, minutes),
       );
     } else {
-      // Default to around 9:00 for non-today days (or start of grid if earlier).
       const nineAM = 9 * 60 - CALENDAR_DAY_START * 60;
       targetMinutesFromStart = Math.max(0, nineAM);
     }
@@ -198,13 +129,6 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
     });
   }, [date, isToday]);
 
-  useEffect(() => {
-    if (!error) return;
-    const t = setTimeout(() => setError(null), 4000);
-    return () => clearTimeout(t);
-  }, [error]);
-
-  // Current-time indicator line position (within this component).
   let currentTimeTop: number | null = null;
   if (isToday && now) {
     const minutesFromStart =
@@ -218,6 +142,23 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
       const headerOffset = ROW_HEIGHT;
       currentTimeTop = headerOffset + offsetWithinGrid;
     }
+  }
+
+  if (stylists.length === 0) {
+    return (
+      <div
+        style={{
+          padding: 24,
+          background: "#fff",
+          border: "1px solid #e5e5e5",
+          borderRadius: 16,
+          color: "#64748b",
+          fontSize: 14,
+        }}
+      >
+        No active stylists to display in columns. Add stylists or adjust filters.
+      </div>
+    );
   }
 
   return (
@@ -239,15 +180,19 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
 
       <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
         {stylists.map((stylist) => {
-          const stylistAppointments = appointments.filter((a) => a.stylist_id === stylist.id);
-          const stylistName = `${stylist.first_name ?? ""} ${stylist.last_name ?? ""}`.trim() || "Unnamed";
+          const stylistAppointments = appointments.filter(
+            (a) => a.stylist_id === stylist.id,
+          );
+          const stylistName =
+            `${stylist.first_name ?? ""} ${stylist.last_name ?? ""}`.trim() ||
+            "Unnamed";
 
           return (
             <div
               key={stylist.id}
               style={{
                 flex: 1,
-                minWidth: 120,
+                minWidth: 140,
                 display: "flex",
                 flexDirection: "column",
                 borderLeft: "1px solid #eee",
@@ -265,6 +210,7 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
                   color: "#111",
                   padding: "0 8px",
                   textAlign: "center",
+                  background: "#fafafa",
                 }}
               >
                 {stylistName}
@@ -283,15 +229,6 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
                 {Array.from({ length: CALENDAR_ROW_COUNT }, (_, rowIndex) => (
                   <div
                     key={rowIndex}
-                    onDragOver={(e) => {
-                      if (!dragged) return;
-                      e.preventDefault();
-                    }}
-                    onDrop={(e) => {
-                      if (!dragged) return;
-                      e.preventDefault();
-                      void handleDropOnSlot(stylist.id, rowIndex);
-                    }}
                     onMouseEnter={() =>
                       setHoveredSlot({ stylistId: stylist.id, row: rowIndex })
                     }
@@ -301,36 +238,27 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
                         prev.stylistId === stylist.id &&
                         prev.row === rowIndex
                           ? null
-                          : prev
+                          : prev,
                       );
                     }}
-                    style={{ minHeight: ROW_HEIGHT - 2 }}
+                    style={{ minHeight: ROW_HEIGHT - 2, position: "relative" }}
                   >
-                    {hoveredSlot &&
-                      hoveredSlot.stylistId === stylist.id &&
-                      hoveredSlot.row === rowIndex && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            pointerEvents: "none",
-                            background:
-                              "linear-gradient(to right, rgba(59,130,246,0.03), transparent)",
-                          }}
-                        />
-                      )}
                     <Link
-                      href={`/dashboard/appointments/new?stylistId=${stylist.id}&date=${date}&time=${timeForRow(rowIndex)}`}
+                      href={`/dashboard/appointments/new?stylistId=${encodeURIComponent(stylist.id)}&date=${encodeURIComponent(date)}&time=${encodeURIComponent(timeForRow(rowIndex))}`}
                       style={{
                         display: "block",
                         minHeight: ROW_HEIGHT - 2,
                         borderBottom: "1px solid #f0f0f0",
-                        background: "transparent",
+                        background:
+                          hoveredSlot &&
+                          hoveredSlot.stylistId === stylist.id &&
+                          hoveredSlot.row === rowIndex
+                            ? "rgba(59,130,246,0.06)"
+                            : "transparent",
                         transition: "background 0.15s",
                         position: "relative",
                       }}
-                      className="scheduler-slot-hover"
-                      title="+ New appointment"
+                      title="New appointment"
                     >
                       {hoveredSlot &&
                         hoveredSlot.stylistId === stylist.id &&
@@ -344,7 +272,7 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
                               color: "#6b7280",
                             }}
                           >
-                            + New appointment
+                            + Book
                           </span>
                         )}
                     </Link>
@@ -355,7 +283,7 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
                   const span = getSpanFromDuration(
                     appt.start_at,
                     appt.end_at,
-                    appt.durationMinutes ?? 60
+                    appt.durationMinutes ?? 60,
                   );
                   return (
                     <div
@@ -373,20 +301,12 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
                         id={appt.id}
                         clientName={appt.clientName}
                         serviceName={appt.serviceName}
-                        timeRange={formatTimeRange(appt.start_at, appt.end_at)}
+                        timeRange={formatSchedulerTimeRange(
+                          appt.start_at,
+                          appt.end_at,
+                        )}
                         status={appt.status}
-                        durationMinutes={appt.durationMinutes}
-                        onDragStart={() =>
-                          setDragged({
-                            id: appt.id,
-                            durationMinutes: appt.durationMinutes ?? 60,
-                            fromStylistId: appt.stylist_id ?? null,
-                          })
-                        }
-                        onDragEnd={() => {
-                          // If drag ends without dropping on a slot, clear state.
-                          setDragged(null);
-                        }}
+                        clientNoShowCount={appt.clientNoShowCount}
                       />
                     </div>
                   );
@@ -410,7 +330,7 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
           <div
             style={{
               marginLeft: 52,
-              borderTop: "1px solid rgba(239,68,68,0.8)",
+              borderTop: "1px solid rgba(239,68,68,0.85)",
               position: "relative",
             }}
           >
@@ -430,25 +350,6 @@ export function DayScheduler({ date, stylists, appointments }: DaySchedulerProps
               Now
             </span>
           </div>
-        </div>
-      )}
-      {error && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 24,
-            left: 24,
-            maxWidth: 320,
-            background: "#111",
-            color: "#fff",
-            padding: "10px 14px",
-            borderRadius: 12,
-            fontSize: 13,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-            zIndex: 40,
-          }}
-        >
-          This time slot is not available.
         </div>
       )}
     </div>

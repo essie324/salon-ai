@@ -4,12 +4,22 @@ import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
 import { localDateISO } from "@/app/lib/dashboard/dateRanges";
 import { normalizeAppointmentDate } from "@/app/lib/appointmentLocalTime";
+import { DayScheduler } from "@/app/components/calendar/DayScheduler";
+import { WeekScheduler } from "@/app/components/calendar/WeekScheduler";
+import {
+  addCalendarDays,
+  enumerateDatesInclusive,
+  getWeekRangeForDateISO,
+  toSchedulerAppointments,
+} from "@/app/lib/calendar/schedulerData";
 
 type SearchParams = {
   date?: string;
   status?: string;
   stylistId?: string;
   showArchived?: string;
+  /** `day` (default) | `week` | `list` */
+  view?: string;
 };
 
 type AppointmentRow = {
@@ -91,6 +101,22 @@ function paymentBadgeColor(status: string | null | undefined): string {
   }
 }
 
+function buildAppointmentsHref(p: {
+  date: string;
+  view: "day" | "week" | "list";
+  status: string;
+  stylistId: string;
+  showArchived: boolean;
+}) {
+  const q = new URLSearchParams();
+  q.set("date", p.date);
+  if (p.view !== "day") q.set("view", p.view);
+  if (p.status) q.set("status", p.status);
+  if (p.stylistId) q.set("stylistId", p.stylistId);
+  if (p.showArchived) q.set("showArchived", "true");
+  return `/dashboard/appointments?${q.toString()}`;
+}
+
 export default async function DashboardAppointmentsPage({
   searchParams,
 }: {
@@ -103,17 +129,31 @@ export default async function DashboardAppointmentsPage({
   const selectedStatus = params.status || "";
   const selectedStylistId = params.stylistId || "";
   const showArchived = params.showArchived === "true";
+  const viewParam = params.view;
+  const view: "day" | "week" | "list" =
+    viewParam === "list" ? "list" : viewParam === "week" ? "week" : "day";
+
+  const weekRange = getWeekRangeForDateISO(selectedDate);
+  const weekDates = enumerateDatesInclusive(weekRange.startISO, weekRange.endISO);
 
   const supabase = await createSupabaseServerClient();
 
-  // List view: filter by calendar `appointment_date` only (not `start_at`), so it matches the booking form.
+  const appointmentsSelect =
+    "id, appointment_date, appointment_time, start_at, end_at, status, notes, service_goal, payment_status, deposit_required, deposit_status, appointment_price_cents, tip_cents, deleted_at, client_id, stylist_id, service_id";
+
+  // Filter by `appointment_date` (calendar day), not `start_at` — matches booking form.
   let appointmentsQuery = supabase
     .from("appointments")
-    .select(
-      "id, appointment_date, appointment_time, start_at, end_at, status, notes, service_goal, payment_status, deposit_required, deposit_status, appointment_price_cents, tip_cents, deleted_at, client_id, stylist_id, service_id"
-    )
-    .eq("appointment_date", selectedDate)
+    .select(appointmentsSelect)
     .order("appointment_time", { ascending: true });
+
+  if (view === "week") {
+    appointmentsQuery = appointmentsQuery
+      .gte("appointment_date", weekRange.startISO)
+      .lte("appointment_date", weekRange.endISO);
+  } else {
+    appointmentsQuery = appointmentsQuery.eq("appointment_date", selectedDate);
+  }
 
   if (selectedStatus) {
     appointmentsQuery = appointmentsQuery.eq("status", selectedStatus);
@@ -237,6 +277,41 @@ export default async function DashboardAppointmentsPage({
     { total: 0, confirmed: 0, completed: 0, cancelled: 0, noShow: 0 }
   );
 
+  const stylistsForCalendar = selectedStylistId
+    ? stylists.filter((s) => s.id === selectedStylistId)
+    : stylists;
+
+  const schedulerInputs = appointments.map((appt) => {
+    const client = appt.client_id ? clientMap.get(appt.client_id) : null;
+    const service = appt.service_id ? serviceMap.get(appt.service_id) : null;
+    return {
+      id: appt.id,
+      start_at: appt.start_at,
+      end_at: appt.end_at,
+      status: appt.status,
+      stylist_id: appt.stylist_id,
+      appointment_date: appt.appointment_date,
+      clientName: client?.name ?? "Unknown",
+      serviceName: service?.name ?? "—",
+      durationMinutes: service?.duration ?? 60,
+      clientNoShowCount: client?.noShowCount,
+    };
+  });
+  const schedulerAppointments = toSchedulerAppointments(schedulerInputs);
+
+  const prevDay = addCalendarDays(selectedDate, -1);
+  const nextDay = addCalendarDays(selectedDate, 1);
+  const prevWeekAnchor = addCalendarDays(selectedDate, -7);
+  const nextWeekAnchor = addCalendarDays(selectedDate, 7);
+
+  const filterLinkBase = {
+    date: selectedDate,
+    view,
+    status: selectedStatus,
+    stylistId: selectedStylistId,
+    showArchived,
+  } as const;
+
   return (
     <main style={mainStyle}>
       <div style={headerRowStyle}>
@@ -246,7 +321,8 @@ export default async function DashboardAppointmentsPage({
           </Link>
           <h1 style={titleStyle}>Appointments</h1>
           <p style={subtitleStyle}>
-            Daily booking view with filters, payment signals, and appointment detail access.
+            Salon schedule: day or week grid with stylist columns, or switch to list for payments and
+            details. Times use each appointment&apos;s stored start/end.
           </p>
         </div>
 
@@ -307,6 +383,8 @@ export default async function DashboardAppointmentsPage({
           </div>
         </div>
 
+        <input type="hidden" name="view" value={view} />
+
         <div style={buttonRowStyle}>
           <button type="submit" style={primarySubmitStyle}>
             Apply Filters
@@ -345,11 +423,107 @@ export default async function DashboardAppointmentsPage({
         </div>
       </div>
 
-      {appointments.length === 0 ? (
-        <div style={emptyCardStyle}>
-          No appointments found for this view.
+      <div style={calendarToolbarStyle}>
+        <div style={viewToggleRowStyle}>
+          <span style={toolbarLabelStyle}>Layout</span>
+          <Link
+            href={buildAppointmentsHref({ ...filterLinkBase, view: "day" })}
+            style={view === "day" ? viewPillActiveStyle : viewPillStyle}
+          >
+            Day
+          </Link>
+          <Link
+            href={buildAppointmentsHref({ ...filterLinkBase, view: "week" })}
+            style={view === "week" ? viewPillActiveStyle : viewPillStyle}
+          >
+            Week
+          </Link>
+          <Link
+            href={buildAppointmentsHref({ ...filterLinkBase, view: "list" })}
+            style={view === "list" ? viewPillActiveStyle : viewPillStyle}
+          >
+            List
+          </Link>
         </div>
-      ) : (
+        <div style={navRowStyle}>
+          {view === "week" ? (
+            <>
+              <Link
+                href={buildAppointmentsHref({ ...filterLinkBase, date: prevWeekAnchor })}
+                style={navLinkStyle}
+              >
+                ← Previous week
+              </Link>
+              <Link
+                href={buildAppointmentsHref({
+                  ...filterLinkBase,
+                  date: localDateISO(),
+                })}
+                style={navLinkStyle}
+              >
+                This week
+              </Link>
+              <Link
+                href={buildAppointmentsHref({ ...filterLinkBase, date: nextWeekAnchor })}
+                style={navLinkStyle}
+              >
+                Next week →
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link
+                href={buildAppointmentsHref({ ...filterLinkBase, date: prevDay })}
+                style={navLinkStyle}
+              >
+                ← Previous day
+              </Link>
+              <Link
+                href={buildAppointmentsHref({ ...filterLinkBase, date: localDateISO() })}
+                style={navLinkStyle}
+              >
+                Today
+              </Link>
+              <Link
+                href={buildAppointmentsHref({ ...filterLinkBase, date: nextDay })}
+                style={navLinkStyle}
+              >
+                Next day →
+              </Link>
+            </>
+          )}
+        </div>
+        <p style={calendarHintStyle}>
+          {view === "week"
+            ? `Week of ${weekRange.startISO}–${weekRange.endISO} (Mon–Sun).`
+            : `Day ${selectedDate}.`}{" "}
+          Archived / deleted appointments are excluded from the active schedule.
+        </p>
+      </div>
+
+      {view !== "list" ? (
+        <div style={{ marginBottom: 28 }}>
+          {view === "day" ? (
+            <DayScheduler
+              date={selectedDate}
+              stylists={stylistsForCalendar}
+              appointments={schedulerAppointments}
+            />
+          ) : (
+            <WeekScheduler
+              weekDates={weekDates}
+              appointments={schedulerAppointments}
+              prefillStylistId={selectedStylistId || undefined}
+            />
+          )}
+        </div>
+      ) : null}
+
+      {view === "list" && appointments.length === 0 ? (
+        <div style={emptyCardStyle}>No appointments found for this view.</div>
+      ) : null}
+
+      {view === "list" && appointments.length > 0 ? (
         <div style={listWrapStyle}>
           {appointments.map((appt) => {
             const client = appt.client_id ? clientMap.get(appt.client_id) : null;
@@ -454,7 +628,7 @@ export default async function DashboardAppointmentsPage({
             );
           })}
         </div>
-      )}
+      ) : null}
     </main>
   );
 }
@@ -564,6 +738,70 @@ const secondaryButtonStyle: CSSProperties = {
   borderRadius: 10,
   border: "1px solid #ccc",
   fontWeight: 700,
+};
+
+const calendarToolbarStyle: CSSProperties = {
+  background: "#fafafa",
+  border: "1px solid #e8e8e8",
+  borderRadius: 14,
+  padding: "14px 16px",
+  marginBottom: 20,
+};
+
+const viewToggleRowStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: 10,
+  marginBottom: 12,
+};
+
+const toolbarLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: "#374151",
+  marginRight: 4,
+};
+
+const viewPillStyle: CSSProperties = {
+  display: "inline-block",
+  padding: "8px 14px",
+  borderRadius: 999,
+  border: "1px solid #d1d5db",
+  background: "#fff",
+  color: "#374151",
+  fontWeight: 700,
+  fontSize: 13,
+  textDecoration: "none",
+};
+
+const viewPillActiveStyle: CSSProperties = {
+  ...viewPillStyle,
+  background: "#111",
+  color: "#fff",
+  border: "1px solid #111",
+};
+
+const navRowStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 16,
+  alignItems: "center",
+  marginBottom: 10,
+};
+
+const navLinkStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: "#0b57d0",
+  textDecoration: "none",
+};
+
+const calendarHintStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 12,
+  color: "#64748b",
+  lineHeight: 1.5,
 };
 
 const statsGridStyle: CSSProperties = {

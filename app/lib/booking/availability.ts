@@ -5,8 +5,25 @@ export type AvailabilityResult = {
   reason?: "outside_working_hours" | "blocked_time";
 };
 
-function toHHmm(time: string): string {
+/** Normalizes DB TIME (or string) to HH:mm for comparisons. */
+export function toHHmm(time: string): string {
   return time.slice(0, 5);
+}
+
+/** Parses HH:mm or HH:mm:ss from local salon time into minutes from midnight. */
+export function parseTimeToMinutes(time: string): number {
+  const h = toHHmm(time);
+  const [hh, mm] = h.split(":").map(Number);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return 0;
+  return hh * 60 + mm;
+}
+
+/** Formats minutes from midnight (0–1439) or beyond (wraps) to HH:mm. */
+export function minutesToHHmm(total: number): string {
+  const t = ((total % 1440) + 1440) % 1440;
+  const hh = Math.floor(t / 60);
+  const mm = t % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
 export async function isStylistAvailable(
@@ -70,4 +87,3 @@ export async function isStylistAvailable(
 
   return { available: true };
 }
-

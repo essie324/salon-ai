@@ -8,6 +8,7 @@ import {
   CALENDAR_SLOT_MINUTES,
 } from "./TimeColumn";
 import { AppointmentBlock } from "./AppointmentBlock";
+import { formatSchedulerTimeRange } from "@/app/lib/calendar/schedulerData";
 
 const ROW_HEIGHT = CALENDAR_ROW_HEIGHT;
 
@@ -50,13 +51,14 @@ type WeekSchedulerAppointment = {
   status: string;
   clientName: string;
   serviceName: string;
-  durationMinutes?: number;
   appointment_date?: string;
 };
 
 type WeekSchedulerProps = {
   weekDates: string[];
   appointments: WeekSchedulerAppointment[];
+  /** When set (e.g. dashboard filter), empty-slot links prefill stylist on new appointment. */
+  prefillStylistId?: string;
 };
 
 function formatDayLabel(iso: string): string {
@@ -76,7 +78,11 @@ const TODAY_ISO = (() => {
   return `${y}-${m}-${d}`;
 })();
 
-export function WeekScheduler({ weekDates, appointments }: WeekSchedulerProps) {
+export function WeekScheduler({
+  weekDates,
+  appointments,
+  prefillStylistId,
+}: WeekSchedulerProps) {
   return (
     <div
       style={{
@@ -185,9 +191,7 @@ export function WeekScheduler({ weekDates, appointments }: WeekSchedulerProps) {
                   (_, rowIndex) => (
                     <Link
                       key={rowIndex}
-                      href={`/dashboard/appointments/new?date=${iso}&time=${timeForRow(
-                        rowIndex,
-                      )}`}
+                      href={`/dashboard/appointments/new?date=${encodeURIComponent(iso)}&time=${encodeURIComponent(timeForRow(rowIndex))}${prefillStylistId ? `&stylistId=${encodeURIComponent(prefillStylistId)}` : ""}`}
                       style={{
                         display: "block",
                         minHeight: ROW_HEIGHT - 2,
@@ -199,11 +203,7 @@ export function WeekScheduler({ weekDates, appointments }: WeekSchedulerProps) {
                 )}
                 {dayAppointments.map((appt) => {
                   const rowStart = getRowFromStart(appt.start_at);
-                  const span = getSpanFromDuration(
-                    appt.start_at,
-                    appt.end_at,
-                    appt.durationMinutes ?? 60,
-                  );
+                  const span = getSpanFromDuration(appt.start_at, appt.end_at, 60);
                   return (
                     <div
                       key={appt.id}
@@ -220,15 +220,11 @@ export function WeekScheduler({ weekDates, appointments }: WeekSchedulerProps) {
                         id={appt.id}
                         clientName={appt.clientName}
                         serviceName={appt.serviceName}
-                        timeRange={new Date(appt.start_at).toLocaleTimeString(
-                          "en-US",
-                          {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          },
+                        timeRange={formatSchedulerTimeRange(
+                          appt.start_at,
+                          appt.end_at,
                         )}
                         status={appt.status}
-                        durationMinutes={appt.durationMinutes}
                       />
                     </div>
                   );

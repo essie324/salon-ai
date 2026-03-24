@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import type { CSSProperties } from "react";
+import { Suspense, type CSSProperties } from "react";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
 import { linkIntakeSessionToAppointment } from "@/app/lib/intake/linkIntakeToAppointment";
@@ -14,6 +14,10 @@ import {
   shouldBlockSelfServeBooking,
   shouldShowDepositRequiredWarning,
 } from "@/app/lib/bookingRules";
+import { getBookableSlotsForServiceDate } from "@/app/lib/booking/suggestions";
+import { getStylistIdsEligibleForService } from "@/app/lib/stylistServiceEligibility";
+import { BookingAvailabilityHints } from "@/app/components/booking/BookingAvailabilityHints";
+import { ShowOpenTimesButton } from "@/app/components/booking/ShowOpenTimesButton";
 
 type SearchParams = {
   clientId?: string;
@@ -315,6 +319,23 @@ export default async function DashboardNewAppointmentPage({
     ? services.find((s) => s.id === effectiveServiceId) ?? null
     : null;
 
+  let eligibleStylistIdsSet: Set<string> | null = null;
+  if (effectiveServiceId) {
+    const eligibleIds = await getStylistIdsEligibleForService(supabase, effectiveServiceId);
+    eligibleStylistIdsSet = eligibleIds ? new Set(eligibleIds) : null;
+  }
+
+  const paramDateTrim = params.date?.trim();
+  const bookableAvailability =
+    effectiveServiceId && paramDateTrim
+      ? await getBookableSlotsForServiceDate(supabase, {
+          serviceId: effectiveServiceId,
+          appointmentDate: paramDateTrim,
+          stylistFilterId: effectiveStylistId || null,
+          stylists,
+        })
+      : null;
+
   const isRebookFlow = params.rebook === "1" || params.rebook === "true";
   const showRebookPanel =
     isRebookFlow && selectedClient != null && params.date?.trim();
@@ -454,7 +475,7 @@ export default async function DashboardNewAppointmentPage({
         </div>
       ) : null}
 
-      <form action={createAppointment} style={formStyle}>
+      <form action={createAppointment} style={formStyle} id="new-appointment-form">
         {FEATURE_INBOX_AND_INTAKE_DB && intakePreview && intakeAlreadyLinked ? (
           <div style={intakeWarnStyle}>
             This intake session is already linked to an appointment. Clear the URL or pick another
@@ -542,10 +563,15 @@ export default async function DashboardNewAppointmentPage({
             <option value="">Select stylist</option>
             {stylists.map((stylist) => {
               const name = stylistDisplayName(stylist);
+              const ineligible =
+                Boolean(effectiveServiceId) &&
+                eligibleStylistIdsSet !== null &&
+                !eligibleStylistIdsSet.has(stylist.id);
 
               return (
-                <option key={stylist.id} value={stylist.id}>
+                <option key={stylist.id} value={stylist.id} disabled={!!ineligible}>
                   {name}
+                  {ineligible ? " — not on this service" : ""}
                 </option>
               );
             })}
@@ -577,9 +603,33 @@ export default async function DashboardNewAppointmentPage({
         </div>
 
         <div style={helperTextStyle}>
-          Availability should be checked against service duration, stylist hours,
-          blocked time, and existing bookings.
+          Open times below use working hours, blocked time, existing bookings, service duration, and service–stylist
+          eligibility. After choosing service and date, click <strong>Show open times</strong> (or load this page with{" "}
+          <code style={{ fontSize: 12 }}>serviceId</code> and <code style={{ fontSize: 12 }}>date</code> in the URL).
         </div>
+
+        <Suspense fallback={null}>
+          <ShowOpenTimesButton />
+        </Suspense>
+
+        {bookableAvailability && effectiveServiceId && paramDateTrim ? (
+          <BookingAvailabilityHints
+            durationMinutes={bookableAvailability.durationMinutes}
+            singleStylistMode={Boolean(effectiveStylistId)}
+            groupedByStylist={bookableAvailability.groupedByStylist}
+            slotsFlat={bookableAvailability.slots}
+            baseQuery={{
+              clientId: params.clientId?.trim(),
+              serviceId: effectiveServiceId,
+              date: paramDateTrim,
+              intakeSessionId: params.intakeSessionId?.trim(),
+              consultationHint: params.consultationHint?.trim(),
+              intakeDecision: params.intakeDecision?.trim(),
+              rebook: params.rebook?.trim(),
+            }}
+            stylistRows={bookableAvailability.stylistRows}
+          />
+        ) : null}
 
         <div>
           <label style={labelStyle}>Service Goal</label>
