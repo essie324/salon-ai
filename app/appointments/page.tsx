@@ -1,6 +1,5 @@
 import AppointmentActions from "../components/AppointmentActions";
 import Link from "next/link";
-import { revalidatePath } from "next/cache";
 import { supabase } from "../lib/supabaseClient";
 
 type Appointment = {
@@ -78,26 +77,6 @@ function groupByStartDate(appointments: Appointment[]) {
   return groups;
 }
 
-async function updateAppointmentStatus(formData: FormData) {
-  "use server";
-
-  const id = String(formData.get("id") || "");
-  const status = String(formData.get("status") || "");
-
-  if (!id || !status) return;
-
-  const { error } = await supabase
-    .from("appointments")
-    .update({ status })
-    .eq("id", id);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  revalidatePath("/appointments");
-}
-
 export default async function AppointmentsPage({
   searchParams,
 }: {
@@ -138,6 +117,11 @@ export default async function AppointmentsPage({
     selectedStylistId === "all"
       ? appointmentList
       : appointmentList.filter((appt) => appt.stylist_id === selectedStylistId);
+
+  const statusReturnTo =
+    selectedStylistId === "all"
+      ? "/appointments"
+      : `/appointments?stylist=${encodeURIComponent(selectedStylistId)}`;
 
   const groupedAppointments = groupByStartDate(filteredAppointments);
   const sortedDates = Object.keys(groupedAppointments).sort();
@@ -346,18 +330,7 @@ export default async function AppointmentsPage({
                           </span>
                         </div>
 
-                        <form
-                          action={updateAppointmentStatus}
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                            alignItems: "stretch",
-                          }}
-                        >
-                          <input type="hidden" name="id" value={appt.id} />
-                          <AppointmentActions id={appt.id} />
-                        </form>
+                        <AppointmentActions id={appt.id} returnTo={statusReturnTo} />
                       </div>
                     </div>
                   );
@@ -376,13 +349,5 @@ const filterButtonStyle: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 999,
   border: "1px solid #ddd",
-  fontWeight: 700,
-};
-
-const actionButtonStyle: React.CSSProperties = {
-  border: "1px solid #ddd",
-  borderRadius: 10,
-  padding: "8px 10px",
-  cursor: "pointer",
   fontWeight: 700,
 };

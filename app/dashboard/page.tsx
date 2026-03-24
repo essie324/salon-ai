@@ -7,6 +7,10 @@ import {
   newAppointmentHrefFromRebookingContext,
   rebookingTimingHint,
 } from "@/app/lib/rebooking/bookingQuery";
+import {
+  NO_SHOW_DEPOSIT_THRESHOLD,
+  NO_SHOW_RESTRICT_THRESHOLD,
+} from "@/app/lib/bookingRules";
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient();
@@ -595,18 +599,38 @@ export default async function DashboardPage() {
           <div style={{ marginBottom: 10, fontSize: 13 }}>
             <strong>No-shows this month:</strong> {summary.noShows.thisMonthCount}
           </div>
+          <p style={{ margin: "0 0 10px", fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+            Salon policy highlights clients at {NO_SHOW_DEPOSIT_THRESHOLD}+ no-shows (deposits) and{" "}
+            {NO_SHOW_RESTRICT_THRESHOLD}+ (approval)—soft emphasis below.
+          </p>
           {summary.noShows.topClients.length === 0 ? (
             <p style={{ margin: 0, fontSize: 13, color: "#555" }}>No no-show history yet.</p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {summary.noShows.topClients.map((c) => (
-                <li key={c.id} style={{ padding: "6px 0", borderBottom: "1px solid #f0f0f0" }}>
-                  <Link href={`/dashboard/clients/${c.id}`} style={{ textDecoration: "none", color: "#111" }}>
-                    <span style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</span>{" "}
-                    <span style={{ fontSize: 12, color: "#555" }}>· {c.noShowCount} no-show{c.noShowCount === 1 ? "" : "s"}</span>
-                  </Link>
-                </li>
-              ))}
+              {summary.noShows.topClients.map((c) => {
+                const elevated = c.noShowCount >= NO_SHOW_DEPOSIT_THRESHOLD;
+                return (
+                  <li
+                    key={c.id}
+                    style={{
+                      padding: "8px 10px",
+                      marginBottom: 4,
+                      borderRadius: 10,
+                      borderBottom: "1px solid #f0f0f0",
+                      background: elevated ? "#fffdf8" : "transparent",
+                      borderLeft: elevated ? "3px solid #fde68a" : "3px solid transparent",
+                    }}
+                  >
+                    <Link href={`/dashboard/clients/${c.id}`} style={{ textDecoration: "none", color: "#111" }}>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</span>{" "}
+                      <span style={{ fontSize: 12, color: "#555" }}>
+                        · {c.noShowCount} no-show{c.noShowCount === 1 ? "" : "s"}
+                        {elevated ? " · review booking rules" : ""}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

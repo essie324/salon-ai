@@ -12,6 +12,13 @@ import type { ClientCategory } from "@/app/lib/clients/intelligence/types";
 import { hasAnyVisitMemory, type AppointmentMemory } from "@/app/lib/visitMemory";
 import { computeClientBehaviorPatterns } from "@/app/lib/clients/patterns";
 import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
+import {
+  effectiveNoShowCount,
+  NO_SHOW_DEPOSIT_THRESHOLD,
+  NO_SHOW_RESTRICT_THRESHOLD,
+  shouldBlockSelfServeBooking,
+  shouldShowDepositRequiredWarning,
+} from "@/app/lib/bookingRules";
 
 type Client = {
   id: string;
@@ -219,7 +226,7 @@ export default async function DashboardClientDetailPage({
     preferredStylist &&
     `${preferredStylist.first_name ?? ""} ${preferredStylist.last_name ?? ""}`.trim();
 
-  const noShowCount = typedClient.no_show_count ?? 0;
+  const noShowCount = effectiveNoShowCount(typedClient);
   const lastNoShowAt = typedClient.last_no_show_at
     ? new Date(typedClient.last_no_show_at).toLocaleDateString("en-US", {
         month: "short",
@@ -228,8 +235,8 @@ export default async function DashboardClientDetailPage({
       })
     : null;
 
-  const depositRequired = typedClient.deposit_required === true || noShowCount >= 2;
-  const bookingRestricted = typedClient.booking_restricted === true || noShowCount >= 3;
+  const depositRequired = shouldShowDepositRequiredWarning(typedClient);
+  const bookingRestricted = shouldBlockSelfServeBooking(typedClient);
   const restrictionNote = typedClient.restriction_note?.trim() || null;
 
   const todayStart = startOfLocalDay(new Date());
@@ -345,15 +352,48 @@ export default async function DashboardClientDetailPage({
           <p style={{ margin: 0, color: "#666" }}>
             Client profile and appointment history
           </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
+            {depositRequired ? (
+              <span style={policyBadgeDepositStyle}>Deposit required</span>
+            ) : null}
+            {bookingRestricted ? (
+              <span style={policyBadgeRestrictStyle}>Booking restricted</span>
+            ) : null}
+            {noShowCount > 0 ? (
+              <span style={policyBadgeNeutralStyle}>
+                {noShowCount} no-show{noShowCount === 1 ? "" : "s"} on file
+                {noShowCount >= NO_SHOW_DEPOSIT_THRESHOLD
+                  ? ` · deposit rule at ≥${NO_SHOW_DEPOSIT_THRESHOLD}`
+                  : ""}
+                {noShowCount >= NO_SHOW_RESTRICT_THRESHOLD
+                  ? ` · restriction at ≥${NO_SHOW_RESTRICT_THRESHOLD}`
+                  : ""}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div style={headerActionsStyle}>
           <Link href={`/dashboard/clients/${id}/edit`} style={secondaryButtonStyle}>
             Edit Client
           </Link>
-          <Link href={bookNextHref} style={primaryButtonStyle}>
-            Book Next Appointment
-          </Link>
+          {bookingRestricted ? (
+            <span
+              title="Self-serve booking is paused; use your manual approval workflow."
+              style={{
+                ...primaryButtonStyle,
+                opacity: 0.65,
+                cursor: "not-allowed",
+                display: "inline-block",
+              }}
+            >
+              Booking needs approval
+            </span>
+          ) : (
+            <Link href={bookNextHref} style={primaryButtonStyle}>
+              Book Next Appointment
+            </Link>
+          )}
         </div>
       </div>
 
@@ -408,6 +448,10 @@ export default async function DashboardClientDetailPage({
             }}
           >
             <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Booking protection</h3>
+            <p style={{ margin: "0 0 8px", fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+              Rules: at {NO_SHOW_DEPOSIT_THRESHOLD}+ no-shows, deposits apply; at {NO_SHOW_RESTRICT_THRESHOLD}+,
+              new bookings need manual approval. Staff flags on the client also apply.
+            </p>
             <p style={{ margin: "4px 0", fontSize: 14 }}>
               <strong>Deposit required:</strong> {depositRequired ? "Yes" : "No"}
             </p>
@@ -987,6 +1031,36 @@ const secondaryButtonStyle: React.CSSProperties = {
   background: "#fff",
   color: "#111",
   fontWeight: 700,
+};
+
+const policyBadgeDepositStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  padding: "5px 10px",
+  borderRadius: 999,
+  background: "#fff7ed",
+  color: "#9a3412",
+  border: "1px solid #fed7aa",
+};
+
+const policyBadgeRestrictStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  padding: "5px 10px",
+  borderRadius: 999,
+  background: "#f1f5f9",
+  color: "#475569",
+  border: "1px solid #e2e8f0",
+};
+
+const policyBadgeNeutralStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  padding: "5px 10px",
+  borderRadius: 999,
+  background: "#f8fafc",
+  color: "#64748b",
+  border: "1px solid #e2e8f0",
 };
 
 const errorBoxStyle: React.CSSProperties = {

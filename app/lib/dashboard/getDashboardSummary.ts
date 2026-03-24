@@ -7,6 +7,8 @@ import type { ClientCategory } from "@/app/lib/clients/intelligence/types";
 import { computeClientVisitMetrics } from "@/app/lib/clients/intelligence/metrics";
 import { computeClientTotalSpendCents } from "@/app/lib/clients/intelligence/spend";
 import { classifyClientCategory } from "@/app/lib/clients/intelligence/classifyClient";
+import type { AppointmentRevenueRow, RevenueInsights } from "@/app/lib/revenue/metrics";
+import { getDashboardRevenueInsights } from "@/app/lib/dashboard/revenueRules";
 import { getCurrentMonthRangeISO, getCurrentWeekRangeISO, localDateISO } from "./dateRanges";
 import { formatLocalISO, startOfLocalDay } from "@/app/lib/retention";
 import { getGapFillSuggestionsForDate, type GapFillSuggestion } from "@/app/lib/scheduling/optimizer";
@@ -31,7 +33,11 @@ export type DashboardSummary = {
   revenue: {
     today: MoneySummary;
     week: MoneySummary;
+    avgTicketWeekCents: number | null;
   };
+
+  /** Week-scoped revenue (payment-aware when statuses exist); optional for charts / future UI. */
+  weekRevenueInsights: RevenueInsights;
 
   todaysAppointments: {
     total: number;
@@ -43,21 +49,12 @@ export type DashboardSummary = {
     scheduled: number;
   };
 
-  overdueClients: {
-    id: string;
-    name: string;
-    lastServiceName: string | null;
-    recommendedNextISO: string;
-  }[];
-
   rebooking: {
     clientsToRebook: {
       id: string;
       name: string;
       lastServiceName: string | null;
-      /** Last completed service id (for booking prefill). */
       lastServiceId: string | null;
-      /** Client preferred stylist when set. */
       preferredStylistId: string | null;
       lastCompletedISO: string;
       recommendedNextISO: string;
@@ -92,24 +89,26 @@ export type DashboardSummary = {
       id: string;
       name: string;
       lastServiceName: string | null;
+      lastServiceId: string | null;
+      preferredStylistId: string | null;
       lastCompletedISO: string;
       recommendedNextISO: string;
       status: "due_soon";
       hasVisitMemory: boolean;
+      daysUntilOrOverdue: number;
     }[];
     overdueClients: {
       id: string;
       name: string;
       lastServiceName: string | null;
+      lastServiceId: string | null;
+      preferredStylistId: string | null;
       lastCompletedISO: string;
       recommendedNextISO: string;
       status: "overdue";
       hasVisitMemory: boolean;
+      daysUntilOrOverdue: number;
     }[];
-    /**
-     * Action queue: who is most "ready" to rebook.
-     * Current rule: overdue + due soon within 7 days. (Timing rules unchanged.)
-     */
     opportunities: {
       id: string;
       name: string;
@@ -138,6 +137,7 @@ export type DashboardSummary = {
     stylistName: string;
     appointmentsToday: number;
     completedToday: number;
+    revenueTodayCents: number;
   }[];
 
   gapFill: {
@@ -158,7 +158,6 @@ export async function getDashboardSummary(
   const week = getCurrentWeekRangeISO(now);
   const month = getCurrentMonthRangeISO(now);
 
-  // 1) Revenue + appointment status breakdowns
   const [
     { count: clientsCount },
     { count: appointmentsCount },
@@ -166,6 +165,7 @@ export async function getDashboardSummary(
     { count: stylistsCount },
     { data: revenueWeekRows },
     { data: todayAppts },
+    { data: todayCompletedRevenueRows },
     { data: monthNoShows },
     { data: topNoShowClients },
     { data: stylists },
@@ -181,7 +181,9 @@ export async function getDashboardSummary(
     supabase.from("stylists").select("*", { count: "exact", head: true }),
     supabase
       .from("appointments")
-      .select("appointment_date, appointment_price_cents, tip_cents")
+      .select(
+        "appointment_date, appointment_price_cents, tip_cents, payment_status, stylist_id",
+      )
       .eq("status", "completed")
       .is("deleted_at", null)
       .gte("appointment_date", week.startISO)
@@ -189,7 +191,18 @@ export async function getDashboardSummary(
 
     supabase
       .from("appointments")
-      .select("id, status, stylist_id")
+      .select(
+        "id, status, stylist_id, appointment_price_cents, tip_cents, payment_status",
+      )
+      .is("deleted_at", null)
+      .eq("appointment_date", todayISO),
+
+    supabase
+      .from("appointments")
+      .select(
+        "appointment_date, stylist_id, appointment_price_cents, tip_cents, payment_status",
+      )
+      .eq("status", "completed")
       .is("deleted_at", null)
       .eq("appointment_date", todayISO),
 
@@ -206,7 +219,7 @@ export async function getDashboardSummary(
       .select("id, first_name, last_name, no_show_count")
       .gt("no_show_count", 0)
       .order("no_show_count", { ascending: false })
-      .limit(5),
+      .limit(8),
 
     supabase
       .from("stylists")
@@ -224,7 +237,6 @@ export async function getDashboardSummary(
       .gte("appointment_date", week.startISO)
       .lte("appointment_date", week.endISO),
 
-    // for retention queues (rebooking): recent COMPLETED appointment history only
     supabase
       .from("appointments")
       .select(
@@ -241,32 +253,29 @@ export async function getDashboardSummary(
         "id, first_name, last_name, no_show_count, deposit_required, booking_restricted, preferred_stylist_id",
       ),
 
-    // visit memory existence (future-friendly signal; does not change timing yet)
     supabase
       .from("appointment_memories")
       .select("appointment_id, appointments!inner(client_id)")
       .limit(2000),
   ]);
 
-  // Revenue totals (completed only; includes price + tip)
-  let todayRevenueCents = 0;
-  let todayCompletedCount = 0;
-  let weekRevenueCents = 0;
-  let weekCompletedCount = 0;
+  const weekRevenueInsights = getDashboardRevenueInsights(
+    (revenueWeekRows ?? []) as AppointmentRevenueRow[],
+  );
 
-  for (const row of revenueWeekRows ?? []) {
-    const total = (row.appointment_price_cents ?? 0) + (row.tip_cents ?? 0);
-    const dateStr = row.appointment_date;
-    if (!dateStr) continue;
-    weekRevenueCents += total;
-    weekCompletedCount += 1;
-    if (dateStr === todayISO) {
-      todayRevenueCents += total;
-      todayCompletedCount += 1;
-    }
-  }
+  const todayRevenueCents =
+    weekRevenueInsights.revenueByDay.find((d) => d.dateISO === todayISO)?.revenueCents ?? 0;
 
-  // Today's appointment status breakdown
+  const todayCompletedRevInsights = getDashboardRevenueInsights(
+    (todayCompletedRevenueRows ?? []) as AppointmentRevenueRow[],
+  );
+  const revenueTodayByStylistId = new Map(
+    todayCompletedRevInsights.revenueByStylist.map((r) => [r.stylistId, r.revenueCents]),
+  );
+
+  const weekRevenueCents = weekRevenueInsights.totalRevenueCents;
+  const weekCompletedCount = (revenueWeekRows ?? []).length;
+
   const counts = {
     total: 0,
     confirmed: 0,
@@ -287,7 +296,8 @@ export async function getDashboardSummary(
     else if (s === "scheduled") counts.scheduled += 1;
   }
 
-  // Stylist utilization snapshot (today)
+  const todayCompletedCount = counts.completed;
+
   const apptsTodayByStylist = new Map<string, { total: number; completed: number }>();
   for (const a of todayAppts ?? []) {
     const sid = a.stylist_id as string | null;
@@ -306,10 +316,10 @@ export async function getDashboardSummary(
       stylistName: name,
       appointmentsToday: stat.total,
       completedToday: stat.completed,
+      revenueTodayCents: revenueTodayByStylistId.get(s.id) ?? 0,
     };
   });
 
-  // No-show summary
   const thisMonthCount = (monthNoShows ?? []).length;
   const topClients = (topNoShowClients ?? []).map((c) => ({
     id: c.id,
@@ -317,7 +327,6 @@ export async function getDashboardSummary(
     noShowCount: c.no_show_count ?? 0,
   }));
 
-  // Top services (top 3 by completed count; include revenue if present)
   const serviceNameById = new Map((services ?? []).map((s) => [s.id, s.name ?? "Unnamed Service"]));
   const byService = new Map<string, { count: number; revenueCents: number }>();
   for (const row of completedWeekForServices ?? []) {
@@ -338,7 +347,6 @@ export async function getDashboardSummary(
     .sort((a, b) => b.completedCount - a.completedCount)
     .slice(0, 3);
 
-  // Rebooking intelligence (service-based return window)
   const clientMap = new Map((clients ?? []).map((c) => [c.id, c]));
   const serviceMap = new Map((services ?? []).map((s) => [s.id, { name: s.name ?? null }]));
   const byClientAppointments = new Map<
@@ -360,9 +368,10 @@ export async function getDashboardSummary(
       start_at: appt.start_at,
       status: appt.status,
       service_id: appt.service_id,
-      appointment_price_cents: (appt as any).appointment_price_cents ?? null,
-      tip_cents: (appt as any).tip_cents ?? null,
-      payment_status: (appt as any).payment_status ?? null,
+      appointment_price_cents: (appt as { appointment_price_cents?: number | null })
+        .appointment_price_cents ?? null,
+      tip_cents: (appt as { tip_cents?: number | null }).tip_cents ?? null,
+      payment_status: (appt as { payment_status?: string | null }).payment_status ?? null,
     });
     byClientAppointments.set(appt.client_id, list);
   }
@@ -371,7 +380,8 @@ export async function getDashboardSummary(
 
   const hasMemoryByClientId = new Set<string>();
   for (const row of memoryJoinRows ?? []) {
-    const clientId = (row as any)?.appointments?.client_id as string | undefined;
+    const clientId = (row as { appointments?: { client_id?: string } })?.appointments
+      ?.client_id as string | undefined;
     if (clientId) hasMemoryByClientId.add(clientId);
   }
 
@@ -379,11 +389,14 @@ export async function getDashboardSummary(
     id: string;
     name: string;
     lastServiceName: string | null;
+    lastServiceId: string | null;
+    preferredStylistId: string | null;
     lastCompletedISO: string;
     recommendedNextISO: string;
     recommendedDate: Date;
     status: "due_soon" | "overdue";
     hasVisitMemory: boolean;
+    daysUntilOrOverdue: number;
   };
 
   type RebookingClientRow = {
@@ -478,7 +491,6 @@ export async function getDashboardSummary(
       });
     }
 
-    // Rebooking queue: due soon / overdue only (concrete recommended return date).
     if (!decision.recommended_next_visit_date) continue;
     if (decision.rebooking_status !== "due_soon" && decision.rebooking_status !== "overdue") {
       continue;
@@ -491,6 +503,9 @@ export async function getDashboardSummary(
     if (!lastCompletedISO || !recommendedNextISO) continue;
 
     const hasVisitMemory = hasMemoryByClientId.has(clientId);
+    const preferredStylistId =
+      (client as { preferred_stylist_id?: string | null }).preferred_stylist_id ?? null;
+
     clientsToRebookAll.push({
       id: clientId,
       name: nameFromParts(client.first_name, client.last_name),
@@ -501,7 +516,7 @@ export async function getDashboardSummary(
       hasVisitMemory,
       lastServiceName: decision.last_completed_service,
       lastServiceId: decision.last_completed_service_id,
-      preferredStylistId: (client as { preferred_stylist_id?: string | null }).preferred_stylist_id ?? null,
+      preferredStylistId,
     });
 
     const retentionStatus = decision.rebooking_status;
@@ -510,15 +525,17 @@ export async function getDashboardSummary(
       id: clientId,
       name: nameFromParts(client.first_name, client.last_name),
       lastServiceName: decision.last_completed_service,
+      lastServiceId: decision.last_completed_service_id,
+      preferredStylistId,
       lastCompletedISO,
       recommendedNextISO,
       recommendedDate: decision.recommended_next_visit_date,
       status: retentionStatus,
       hasVisitMemory,
+      daysUntilOrOverdue: decision.days_until_or_overdue ?? 0,
     });
   }
 
-  // Clients not present in the fetched appointment history are treated as inactive.
   for (const [clientId] of clientMap.entries()) {
     if (!processedClientIds.has(clientId)) {
       intelligenceCounts.inactive += 1;
@@ -552,26 +569,21 @@ export async function getDashboardSummary(
     .filter((r) => r.status === "due_soon")
     .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
 
-  // Opportunities: overdue + due soon within 7 days (inclusive)
   const opportunityEnd = startOfLocalDay(new Date(startOfToday.getTime()));
   opportunityEnd.setDate(opportunityEnd.getDate() + 7);
   const opportunities = allRetention
-    .filter((r) => r.status === "overdue" || r.recommendedDate.getTime() <= opportunityEnd.getTime())
+    .filter(
+      (r) =>
+        r.status === "overdue" || r.recommendedDate.getTime() <= opportunityEnd.getTime(),
+    )
     .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
-
-  const overdueClients = overdue.slice(0, 8).map((r) => ({
-    id: r.id,
-    name: r.name,
-    lastServiceName: r.lastServiceName,
-    recommendedNextISO: r.recommendedNextISO,
-  }));
 
   const clientIntelligenceAtRisk = atRiskClientsAll
     .slice()
     .sort((a, b) => {
       const ra = a.recommendedReturnDate ? a.recommendedReturnDate.getTime() : Number.POSITIVE_INFINITY;
       const rb = b.recommendedReturnDate ? b.recommendedReturnDate.getTime() : Number.POSITIVE_INFINITY;
-      if (ra !== rb) return ra - rb; // earliest return first
+      if (ra !== rb) return ra - rb;
       return b.totalSpendCents - a.totalSpendCents;
     })
     .slice(0, 8)
@@ -621,11 +633,18 @@ export async function getDashboardSummary(
       stylists: stylistsCount ?? 0,
     },
     revenue: {
-      today: { revenueCents: todayRevenueCents, completedCount: todayCompletedCount },
-      week: { revenueCents: weekRevenueCents, completedCount: weekCompletedCount },
+      today: {
+        revenueCents: todayRevenueCents,
+        completedCount: todayCompletedCount,
+      },
+      week: {
+        revenueCents: weekRevenueCents,
+        completedCount: weekCompletedCount,
+      },
+      avgTicketWeekCents: weekRevenueInsights.avgTicketCents,
     },
+    weekRevenueInsights,
     todaysAppointments: counts,
-    overdueClients,
     rebooking: {
       clientsToRebook,
     },
@@ -639,19 +658,25 @@ export async function getDashboardSummary(
         id: r.id,
         name: r.name,
         lastServiceName: r.lastServiceName,
+        lastServiceId: r.lastServiceId,
+        preferredStylistId: r.preferredStylistId,
         lastCompletedISO: r.lastCompletedISO,
         recommendedNextISO: r.recommendedNextISO,
         status: "due_soon",
         hasVisitMemory: r.hasVisitMemory,
+        daysUntilOrOverdue: r.daysUntilOrOverdue,
       })),
       overdueClients: overdue.slice(0, 8).map((r) => ({
         id: r.id,
         name: r.name,
         lastServiceName: r.lastServiceName,
+        lastServiceId: r.lastServiceId,
+        preferredStylistId: r.preferredStylistId,
         lastCompletedISO: r.lastCompletedISO,
         recommendedNextISO: r.recommendedNextISO,
         status: "overdue",
         hasVisitMemory: r.hasVisitMemory,
+        daysUntilOrOverdue: r.daysUntilOrOverdue,
       })),
       opportunities: opportunities.slice(0, 10).map((r) => ({
         id: r.id,
@@ -664,7 +689,7 @@ export async function getDashboardSummary(
       })),
     },
     noShows: {
-      thisMonthCount,
+      thisMonthCount: thisMonthCount,
       topClients,
     },
     topServices,

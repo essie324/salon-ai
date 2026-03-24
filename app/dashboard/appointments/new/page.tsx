@@ -9,6 +9,11 @@ import {
   mapIntakeToRecommendation,
 } from "@/app/lib/ai/mapIntakeToRecommendation";
 import type { IntakeRecommendation } from "@/app/lib/ai/decisionEngine";
+import {
+  MANUAL_APPROVAL_BOOKING_MESSAGE,
+  shouldBlockSelfServeBooking,
+  shouldShowDepositRequiredWarning,
+} from "@/app/lib/bookingRules";
 
 type SearchParams = {
   clientId?: string;
@@ -35,6 +40,9 @@ type Client = {
   email: string | null;
   phone: string | null;
   preferred_stylist_id?: string | null;
+  no_show_count?: number | null;
+  deposit_required?: boolean | null;
+  booking_restricted?: boolean | null;
 };
 
 type Service = {
@@ -70,6 +78,24 @@ async function createAppointment(formData: FormData) {
   if (!client_id || !service_id || !stylist_id || !appointment_date || !appointment_time) {
     throw new Error("Missing required appointment fields.");
   }
+
+  const { data: bookingClient, error: bookingClientErr } = await supabase
+    .from("clients")
+    .select("no_show_count, deposit_required, booking_restricted")
+    .eq("id", client_id)
+    .maybeSingle();
+
+  if (bookingClientErr) throw new Error(bookingClientErr.message);
+
+  if (shouldBlockSelfServeBooking(bookingClient)) {
+    const q = new URLSearchParams();
+    q.set("clientId", client_id);
+    q.set("error", "restricted");
+    q.set("message", MANUAL_APPROVAL_BOOKING_MESSAGE);
+    redirect(`/dashboard/appointments/new?${q.toString()}`);
+  }
+
+  const depositRequiredForAppt = shouldShowDepositRequiredWarning(bookingClient);
 
   let intake_session_id: string | null = null;
   if (FEATURE_INBOX_AND_INTAKE_DB && intake_session_id_raw) {
@@ -119,6 +145,7 @@ async function createAppointment(formData: FormData) {
     service_goal: service_goal || null,
     intake_notes: intake_notes || null,
     consultation_required,
+    deposit_required: depositRequiredForAppt,
   };
   if (intake_session_id) {
     insertRow.intake_session_id = intake_session_id;
@@ -178,7 +205,9 @@ export default async function DashboardNewAppointmentPage({
   ] = await Promise.all([
     supabase
       .from("clients")
-      .select("id, first_name, last_name, email, phone, preferred_stylist_id")
+      .select(
+        "id, first_name, last_name, email, phone, preferred_stylist_id, no_show_count, deposit_required, booking_restricted",
+      )
       .order("first_name", { ascending: true }),
     supabase
       .from("services")
@@ -315,11 +344,25 @@ export default async function DashboardNewAppointmentPage({
         </div>
       </div>
 
-      {params.message ? <div style={infoBoxStyle}>{params.message}</div> : null}
+      {params.message && !params.error ? <div style={infoBoxStyle}>{params.message}</div> : null}
 
       {params.error ? (
         <div style={errorBoxStyle}>
-          {params.message || "Unable to create appointment."}
+          {params.message?.trim()
+            ? params.message
+            : params.error === "restricted"
+              ? MANUAL_APPROVAL_BOOKING_MESSAGE
+              : "Unable to create appointment."}
+        </div>
+      ) : null}
+
+      {selectedClient && shouldShowDepositRequiredWarning(selectedClient) ? (
+        <div style={depositNoticeStyle}>
+          <strong>Deposit required</strong>
+          <span style={{ display: "block", marginTop: 6, fontSize: 14, fontWeight: 400, color: "#334155" }}>
+            This client is on the deposit list (policy from no-show history or staff setting). You can still
+            book—collect or confirm deposit per salon process.
+          </span>
         </div>
       ) : null}
 
@@ -452,13 +495,19 @@ export default async function DashboardNewAppointmentPage({
                 client.phone ||
                 "Unnamed Client";
 
+              const restricted = shouldBlockSelfServeBooking(client);
               return (
                 <option key={client.id} value={client.id}>
                   {name}
+                  {restricted ? " — booking restricted (manual approval)" : ""}
                 </option>
               );
             })}
           </select>
+          <p style={helperTextStyle}>
+            Restricted clients can be selected to review details; saving is blocked until policy is cleared or
+            approved off-channel.
+          </p>
         </div>
 
         <div>
@@ -657,6 +706,16 @@ const errorBoxStyle: CSSProperties = {
   padding: 14,
   borderRadius: 12,
   marginBottom: 20,
+};
+
+const depositNoticeStyle: CSSProperties = {
+  background: "#fffbeb",
+  border: "1px solid #fde68a",
+  color: "#92400e",
+  padding: 14,
+  borderRadius: 12,
+  marginBottom: 20,
+  fontSize: 14,
 };
 
 const rebookPanelStyle: CSSProperties = {
