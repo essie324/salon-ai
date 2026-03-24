@@ -4,6 +4,11 @@ import type { CSSProperties } from "react";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { FEATURE_INBOX_AND_INTAKE_DB } from "@/app/lib/featureFlags";
 import { linkIntakeSessionToAppointment } from "@/app/lib/intake/linkIntakeToAppointment";
+import {
+  intakeRowToDecisionInput,
+  mapIntakeToRecommendation,
+} from "@/app/lib/ai/mapIntakeToRecommendation";
+import type { IntakeRecommendation } from "@/app/lib/ai/decisionEngine";
 
 type SearchParams = {
   clientId?: string;
@@ -17,6 +22,10 @@ type SearchParams = {
   rebook?: string;
   /** Prefill optional linked intake session (from guest intake flow). */
   intakeSessionId?: string;
+  /** From intake guidance: pre-check consultation when "1". */
+  consultationHint?: string;
+  /** book_now | consultation_required | manual_review — from intake guidance. */
+  intakeDecision?: string;
 };
 
 type Client = {
@@ -153,7 +162,9 @@ export default async function DashboardNewAppointmentPage({
   const intakeSessionsQuery = FEATURE_INBOX_AND_INTAKE_DB
     ? supabase
         .from("intake_sessions")
-        .select("id, client_id, requested_service, created_at")
+        .select(
+          "id, client_id, requested_service, requested_stylist, timing_preference, budget_notes, concern_notes, ai_summary, created_at",
+        )
         .is("appointment_id", null)
         .order("created_at", { ascending: false })
         .limit(80)
@@ -201,6 +212,11 @@ export default async function DashboardNewAppointmentPage({
     id: string;
     client_id: string | null;
     requested_service: string | null;
+    requested_stylist: string | null;
+    timing_preference: string | null;
+    budget_notes: string | null;
+    concern_notes: string | null;
+    ai_summary: string | null;
     created_at: string;
   };
   const unlinkedIntakes = (intakeRes.data ?? []) as UnlinkedIntake[];
@@ -212,7 +228,9 @@ export default async function DashboardNewAppointmentPage({
   if (FEATURE_INBOX_AND_INTAKE_DB && paramIntakeId && !intakePreview) {
     const { data: row } = await supabase
       .from("intake_sessions")
-      .select("id, client_id, requested_service, created_at, appointment_id")
+      .select(
+        "id, client_id, requested_service, requested_stylist, timing_preference, budget_notes, concern_notes, ai_summary, created_at, appointment_id",
+      )
       .eq("id", paramIntakeId)
       .maybeSingle();
     intakePreview = row as typeof intakePreview;
@@ -224,6 +242,26 @@ export default async function DashboardNewAppointmentPage({
       "appointment_id" in intakePreview &&
       (intakePreview as { appointment_id?: string | null }).appointment_id,
   );
+
+  let intakeGuidance: IntakeRecommendation | null = null;
+  if (
+    FEATURE_INBOX_AND_INTAKE_DB &&
+    intakePreview &&
+    !intakeAlreadyLinked &&
+    paramIntakeId
+  ) {
+    intakeGuidance = mapIntakeToRecommendation(
+      intakeRowToDecisionInput(
+        intakePreview as Parameters<typeof intakeRowToDecisionInput>[0],
+      ),
+      services.map((s) => ({ id: s.id, name: s.name })),
+      stylists.map((s) => ({
+        id: s.id,
+        first_name: s.first_name,
+        last_name: s.last_name,
+      })),
+    );
+  }
 
   const selectedClient = params.clientId
     ? clients.find((c) => c.id === params.clientId) ?? null
@@ -283,6 +321,30 @@ export default async function DashboardNewAppointmentPage({
         <div style={errorBoxStyle}>
           {params.message || "Unable to create appointment."}
         </div>
+      ) : null}
+
+      {FEATURE_INBOX_AND_INTAKE_DB && intakeGuidance && paramIntakeId && !intakeAlreadyLinked ? (
+        <section style={intakeGuidePanelStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <h2 style={intakeGuideTitleStyle}>Intake guidance</h2>
+            <span style={intakeGuideBadgeStyle(intakeGuidance.recommended_next_step)}>
+              {intakeGuidance.recommended_next_step === "book_now"
+                ? "Book now"
+                : intakeGuidance.recommended_next_step === "consultation_required"
+                  ? "Consultation suggested"
+                  : "Manual review"}
+            </span>
+          </div>
+          <p style={{ margin: "0 0 10px 0", fontSize: 14, color: "#334155", lineHeight: 1.55 }}>
+            {intakeGuidance.reasoning_summary}
+          </p>
+          <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
+            Confidence: {intakeGuidance.confidence_level}
+            {intakeGuidance.recommended_service_id
+              ? " · Service prefilled when matched to catalog"
+              : ""}
+          </p>
+        </section>
       ) : null}
 
       {showRebookPanel ? (
@@ -481,7 +543,14 @@ export default async function DashboardNewAppointmentPage({
         </div>
 
         <label style={checkboxRowStyle}>
-          <input type="checkbox" name="consultation_required" />
+          <input
+            type="checkbox"
+            name="consultation_required"
+            defaultChecked={
+              params.consultationHint === "1" ||
+              params.intakeDecision === "consultation_required"
+            }
+          />
           Consultation required
         </label>
 
@@ -747,3 +816,39 @@ const intakeWarnStyle: CSSProperties = {
   marginBottom: 12,
   fontSize: 14,
 };
+
+const intakeGuidePanelStyle: CSSProperties = {
+  background: "linear-gradient(180deg, #faf5ff 0%, #ffffff 100%)",
+  border: "1px solid #e9d5ff",
+  borderRadius: 16,
+  padding: 20,
+  marginBottom: 22,
+  boxShadow: "0 2px 12px rgba(88, 28, 135, 0.06)",
+};
+
+const intakeGuideTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "1.1rem",
+  fontWeight: 800,
+  color: "#581c87",
+};
+
+function intakeGuideBadgeStyle(
+  step: IntakeRecommendation["recommended_next_step"],
+): CSSProperties {
+  const base: CSSProperties = {
+    fontSize: 11,
+    fontWeight: 800,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    padding: "4px 10px",
+    borderRadius: 999,
+  };
+  if (step === "book_now") {
+    return { ...base, background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" };
+  }
+  if (step === "consultation_required") {
+    return { ...base, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" };
+  }
+  return { ...base, background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" };
+}
