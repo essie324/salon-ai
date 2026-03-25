@@ -63,10 +63,13 @@ export type SchedulerAppointmentInput = {
   end_at: string | null;
   status: string | null;
   stylist_id: string | null;
+  service_id: string | null;
   appointment_date: string | null;
   clientName: string;
   serviceName: string;
   durationMinutes: number;
+  /** Resolved hex accent for calendar blocks */
+  stylistCalendarColor?: string;
   clientNoShowCount?: number;
 };
 
@@ -76,10 +79,12 @@ export type SchedulerAppointment = {
   end_at: string | null;
   status: string;
   stylist_id: string | null;
+  service_id: string | null;
   appointment_date?: string;
   clientName: string;
   serviceName: string;
   durationMinutes?: number;
+  stylistCalendarColor?: string;
   clientNoShowCount?: number;
 };
 
@@ -98,10 +103,12 @@ export function toSchedulerAppointments(
       end_at: r.end_at,
       status: r.status ?? "scheduled",
       stylist_id: r.stylist_id,
+      service_id: r.service_id,
       appointment_date: r.appointment_date ?? undefined,
       clientName: r.clientName,
       serviceName: r.serviceName,
       durationMinutes: r.durationMinutes,
+      stylistCalendarColor: r.stylistCalendarColor,
       clientNoShowCount: r.clientNoShowCount,
     });
   }

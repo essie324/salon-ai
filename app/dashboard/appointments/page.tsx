@@ -12,6 +12,10 @@ import {
   getWeekRangeForDateISO,
   toSchedulerAppointments,
 } from "@/app/lib/calendar/schedulerData";
+import {
+  resolveStylistCalendarColor,
+  UNASSIGNED_APPOINTMENT_BLOCK_COLOR,
+} from "@/app/lib/calendar/stylistColors";
 
 type SearchParams = {
   date?: string;
@@ -53,6 +57,7 @@ type StylistRow = {
   id: string;
   first_name: string | null;
   last_name: string | null;
+  calendar_color: string | null;
 };
 
 type ServiceRow = {
@@ -181,7 +186,7 @@ export default async function DashboardAppointmentsPage({
       .select("id, first_name, last_name, no_show_count"),
     supabase
       .from("stylists")
-      .select("id, first_name, last_name")
+      .select("id, first_name, last_name, calendar_color")
       .eq("is_active", true)
       .order("first_name", { ascending: true }),
     supabase
@@ -281,19 +286,36 @@ export default async function DashboardAppointmentsPage({
     ? stylists.filter((s) => s.id === selectedStylistId)
     : stylists;
 
+  const stylistColorById = new Map(
+    stylists.map((s) => [s.id, resolveStylistCalendarColor(s.id, s.calendar_color)] as const),
+  );
+
+  const stylistsForDayScheduler = stylistsForCalendar.map((s) => ({
+    id: s.id,
+    first_name: s.first_name,
+    last_name: s.last_name,
+    calendarColor: resolveStylistCalendarColor(s.id, s.calendar_color),
+  }));
+
   const schedulerInputs = appointments.map((appt) => {
     const client = appt.client_id ? clientMap.get(appt.client_id) : null;
     const service = appt.service_id ? serviceMap.get(appt.service_id) : null;
+    const stylistCalendarColor = appt.stylist_id
+      ? stylistColorById.get(appt.stylist_id) ??
+        resolveStylistCalendarColor(appt.stylist_id, null)
+      : UNASSIGNED_APPOINTMENT_BLOCK_COLOR;
     return {
       id: appt.id,
       start_at: appt.start_at,
       end_at: appt.end_at,
       status: appt.status,
       stylist_id: appt.stylist_id,
+      service_id: appt.service_id,
       appointment_date: appt.appointment_date,
       clientName: client?.name ?? "Unknown",
       serviceName: service?.name ?? "—",
       durationMinutes: service?.duration ?? 60,
+      stylistCalendarColor,
       clientNoShowCount: client?.noShowCount,
     };
   });
@@ -506,7 +528,7 @@ export default async function DashboardAppointmentsPage({
           {view === "day" ? (
             <DayScheduler
               date={selectedDate}
-              stylists={stylistsForCalendar}
+              stylists={stylistsForDayScheduler}
               appointments={schedulerAppointments}
             />
           ) : (

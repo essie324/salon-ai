@@ -2,12 +2,15 @@ import Link from "next/link";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { getActiveRole } from "@/app/lib/roleCookies";
 import RoleGate from "@/app/dashboard/_components/RoleGate";
+import { updateStylistCalendarColor } from "@/app/actions/stylistCalendarColor";
+import { resolveStylistCalendarColor } from "@/app/lib/calendar/stylistColors";
 
 type Stylist = {
   id: string;
   first_name: string | null;
   last_name: string | null;
   is_active: boolean | null;
+  calendar_color: string | null;
 };
 
 type Service = {
@@ -36,7 +39,7 @@ export default async function DashboardStylistDetailPage({
 
   const { data: stylist, error: stylistError } = await supabase
     .from("stylists")
-    .select("id, first_name, last_name, is_active")
+    .select("id, first_name, last_name, is_active, calendar_color")
     .eq("id", id)
     .maybeSingle();
 
@@ -107,9 +110,10 @@ export default async function DashboardStylistDetailPage({
     });
   }
 
+  const stylistRow = stylist as Stylist;
   const name =
-    `${(stylist as Stylist).first_name ?? ""} ${(stylist as Stylist).last_name ?? ""}`.trim() ||
-    "Unnamed Stylist";
+    `${stylistRow.first_name ?? ""} ${stylistRow.last_name ?? ""}`.trim() || "Unnamed Stylist";
+  const resolvedCalendarColor = resolveStylistCalendarColor(id, stylistRow.calendar_color);
 
   return (
     <RoleGate role={role} allowed={["manager", "admin"]}>
@@ -146,7 +150,7 @@ export default async function DashboardStylistDetailPage({
             </Link>
             <h1 style={{ fontSize: "2rem", margin: "0 0 8px 0" }}>{name}</h1>
             <p style={{ margin: 0, color: "#666", fontSize: 14 }}>
-              {(stylist as Stylist).is_active !== false ? "Active" : "Inactive"}
+              {stylistRow.is_active !== false ? "Active" : "Inactive"}
             </p>
           </div>
 
@@ -165,6 +169,82 @@ export default async function DashboardStylistDetailPage({
           >
             Manage availability
           </Link>
+        </div>
+
+        <div
+          style={{
+            background: "#fff",
+            border: "1px solid #e5e5e5",
+            borderRadius: 18,
+            padding: 24,
+            boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+            marginBottom: 24,
+          }}
+        >
+          <h2 style={{ margin: "0 0 8px 0", fontSize: "1.2rem" }}>Calendar color</h2>
+          <p style={{ margin: "0 0 16px 0", color: "#555", fontSize: 14 }}>
+            Shown on the appointments calendar for this stylist&apos;s column and blocks. Leave blank to
+            use an automatic color from the default palette.
+          </p>
+          <form
+            action={updateStylistCalendarColor}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              alignItems: "flex-end",
+            }}
+          >
+            <input type="hidden" name="stylistId" value={id} />
+            <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+              Hex (e.g. #6b8cae)
+              <input
+                name="calendar_color"
+                type="text"
+                defaultValue={stylistRow.calendar_color ?? ""}
+                placeholder="#6b8cae"
+                autoComplete="off"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #d4d4d4",
+                  fontSize: 14,
+                  width: 200,
+                  maxWidth: "100%",
+                }}
+              />
+            </label>
+            <button
+              type="submit"
+              style={{
+                padding: "10px 18px",
+                borderRadius: 10,
+                border: "none",
+                background: "#0b57d0",
+                color: "#fff",
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              Save color
+            </button>
+          </form>
+          <p style={{ margin: "12px 0 0 0", fontSize: 13, color: "#64748b" }}>
+            Preview:{" "}
+            <span
+              title={resolvedCalendarColor}
+              style={{
+                display: "inline-block",
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                verticalAlign: "middle",
+                background: resolvedCalendarColor,
+                border: "1px solid rgba(0,0,0,0.12)",
+              }}
+            />
+          </p>
         </div>
 
         <div
