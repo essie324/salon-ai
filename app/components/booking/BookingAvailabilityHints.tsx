@@ -65,12 +65,13 @@ const chipGridStyle: CSSProperties = {
   gap: 8,
 };
 
-const chipStyle: CSSProperties = {
+/** Suggested open slots (server-verified available). */
+const chipAvailableStyle: CSSProperties = {
   display: "inline-block",
   padding: "8px 10px",
   borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  background: "#fff",
+  border: "1px solid #6ee7b7",
+  background: "#f0fdf4",
   color: "#0f172a",
   fontSize: 13,
   fontWeight: 600,
@@ -131,7 +132,7 @@ export function BookingAvailabilityHints({
             <Link
               key={`${slot.stylistId}-${slot.startTime}`}
               href={buildHref(slot, baseQuery)}
-              style={chipStyle}
+              style={chipAvailableStyle}
               prefetch={false}
             >
               {slot.startTime}
@@ -151,7 +152,7 @@ export function BookingAvailabilityHints({
                   <Link
                     key={`${slot.stylistId}-${slot.startTime}`}
                     href={buildHref(slot, baseQuery)}
-                    style={chipStyle}
+                    style={chipAvailableStyle}
                     prefetch={false}
                   >
                     {slot.startTime}

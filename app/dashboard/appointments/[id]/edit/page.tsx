@@ -1,22 +1,22 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import {
-  hasStylistConflict,
-  CONFLICT_MESSAGE,
-} from "@/app/lib/appointmentConflicts";
+  validateBookingSlot,
+  BOOKING_UNAVAILABLE_MESSAGE,
+} from "@/app/lib/booking/conflicts";
 import {
-  validateStylistAvailability,
   getSuggestedTimeSlots,
   getAlternateStylistSuggestions,
   formatSuggestionsTry,
-  formatSuggestionsOptions,
   formatAlternateStylists,
 } from "@/app/lib/stylistAvailability";
 import { isStylistEligibleForService } from "@/app/lib/stylistServiceEligibility";
 import { determineConsultationRouting } from "@/app/lib/booking/consultationRouting";
 import { computeDepositPolicy } from "@/app/lib/booking/depositRules";
 import { parsePhotoUrlsInput, photoUrlsToTextareaValue } from "@/app/lib/visitMemory";
+import { BookingSlotValidationClient } from "../../../../components/booking/BookingSlotValidationClient";
 
 async function updateAppointment(id: string, formData: FormData) {
   "use server";
@@ -107,15 +107,21 @@ async function updateAppointment(id: string, formData: FormData) {
       ? Number((serviceRow as { duration_minutes: number }).duration_minutes)
       : 60;
 
-  const conflict = await hasStylistConflict(supabase, {
-    stylist_id,
-    appointment_date,
-    appointment_time,
-    durationMinutes,
+  const startAtLocal = new Date(`${appointment_date}T${appointment_time}`);
+  const start_at = startAtLocal.toISOString();
+  const end_at = new Date(
+    startAtLocal.getTime() + durationMinutes * 60 * 1000
+  ).toISOString();
+
+  const slotCheck = await validateBookingSlot(supabase, {
+    stylistId: stylist_id,
+    startAt: start_at,
+    endAt: end_at,
     excludeAppointmentId: id,
+    serviceId: service_id,
   });
 
-  if (conflict) {
+  if (!slotCheck.ok) {
     const [suggestions, { alternates }] = await Promise.all([
       getSuggestedTimeSlots(supabase, {
         stylist_id,
@@ -133,55 +139,15 @@ async function updateAppointment(id: string, formData: FormData) {
       }),
     ]);
     let message =
-      CONFLICT_MESSAGE + (suggestions.length > 0 ? " " + formatSuggestionsTry(suggestions) : "");
+      BOOKING_UNAVAILABLE_MESSAGE +
+      (suggestions.length > 0 ? " " + formatSuggestionsTry(suggestions) : "");
     if (alternates.length > 0) {
       message += " Available alternatives: " + formatAlternateStylists(alternates) + ".";
     }
     redirect(
-      `/dashboard/appointments/${id}/edit?error=conflict&message=${encodeURIComponent(message)}`
+      `/dashboard/appointments/${id}/edit?error=slot&message=${encodeURIComponent(message)}`
     );
   }
-
-  const availability = await validateStylistAvailability(supabase, {
-    stylist_id,
-    appointment_date,
-    appointment_time,
-    durationMinutes,
-  });
-
-  if (!availability.valid) {
-    const [suggestions, { alternates }] = await Promise.all([
-      getSuggestedTimeSlots(supabase, {
-        stylist_id,
-        appointment_date,
-        durationMinutes,
-        excludeAppointmentId: id,
-      }),
-      getAlternateStylistSuggestions(supabase, {
-        appointment_date,
-        appointment_time,
-        durationMinutes,
-        selectedStylistId: stylist_id,
-        service_id,
-        excludeAppointmentId: id,
-      }),
-    ]);
-    let message = availability.message;
-    if (suggestions.length > 0) message += " " + formatSuggestionsOptions(suggestions);
-    if (alternates.length > 0) {
-      message += " Available alternatives: " + formatAlternateStylists(alternates) + ".";
-    }
-    redirect(
-      `/dashboard/appointments/${id}/edit?error=availability&message=${encodeURIComponent(message)}`
-    );
-  }
-
-  const startAtLocal = new Date(`${appointment_date}T${appointment_time}`);
-  const start_at = startAtLocal.toISOString();
-
-  const end_at = new Date(
-    startAtLocal.getTime() + durationMinutes * 60 * 1000
-  ).toISOString();
 
   const { error } = await supabase
     .from("appointments")
@@ -278,17 +244,22 @@ export default async function DashboardAppointmentEditPage({
   const resolvedSearch = await searchParams;
   const showConflictError = resolvedSearch?.error === "conflict";
   const showAvailabilityError = resolvedSearch?.error === "availability";
+  const showSlotError = resolvedSearch?.error === "slot";
   const showEligibilityError = resolvedSearch?.error === "eligibility";
   const showConsultationError = resolvedSearch?.error === "consultation";
   const showRestrictedError = resolvedSearch?.error === "restricted";
   const conflictMessage =
     resolvedSearch?.error === "conflict" && resolvedSearch?.message
       ? resolvedSearch.message
-      : CONFLICT_MESSAGE;
+      : BOOKING_UNAVAILABLE_MESSAGE;
   const availabilityMessage =
     resolvedSearch?.error === "availability" && resolvedSearch?.message
       ? resolvedSearch.message
-      : "This time is not available for the selected stylist.";
+      : BOOKING_UNAVAILABLE_MESSAGE;
+  const slotMessage =
+    resolvedSearch?.error === "slot" && resolvedSearch?.message
+      ? resolvedSearch.message
+      : BOOKING_UNAVAILABLE_MESSAGE;
   const eligibilityMessage =
     resolvedSearch?.error === "eligibility" && resolvedSearch?.message
       ? resolvedSearch.message
@@ -416,6 +387,22 @@ export default async function DashboardAppointmentEditPage({
         </div>
       ) : null}
 
+      {showSlotError ? (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: "14px 18px",
+            borderRadius: 12,
+            background: "#fef2f2",
+            color: "#b91c1c",
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {slotMessage}
+        </div>
+      ) : null}
+
       {showConsultationError ? (
         <div
           style={{
@@ -465,6 +452,7 @@ export default async function DashboardAppointmentEditPage({
       ) : null}
 
       <form
+        id="edit-appointment-form"
         action={updateAppointment.bind(null, id)}
         style={{
           ...cardStyle,
@@ -573,6 +561,10 @@ export default async function DashboardAppointmentEditPage({
             </p>
           </div>
         </div>
+
+        <Suspense fallback={null}>
+          <BookingSlotValidationClient formId="edit-appointment-form" excludeAppointmentId={id} />
+        </Suspense>
 
         <div>
           <label htmlFor="status" style={labelStyle}>

@@ -18,6 +18,8 @@ import { getBookableSlotsForServiceDate } from "@/app/lib/booking/suggestions";
 import { getStylistIdsEligibleForService } from "@/app/lib/stylistServiceEligibility";
 import { BookingAvailabilityHints } from "@/app/components/booking/BookingAvailabilityHints";
 import { ShowOpenTimesButton } from "@/app/components/booking/ShowOpenTimesButton";
+import { BookingSlotValidationClient } from "../../../components/booking/BookingSlotValidationClient";
+import { validateBookingSlot } from "@/app/lib/booking/conflicts";
 
 type SearchParams = {
   clientId?: string;
@@ -135,6 +137,27 @@ async function createAppointment(formData: FormData) {
   const end_at = new Date(
     startAtLocal.getTime() + durationMinutes * 60 * 1000
   ).toISOString();
+
+  const slotCheck = await validateBookingSlot(supabase, {
+    stylistId: stylist_id,
+    startAt: start_at,
+    endAt: end_at,
+    serviceId: service_id,
+  });
+  if (!slotCheck.ok) {
+    const q = new URLSearchParams();
+    q.set("clientId", client_id);
+    q.set("serviceId", service_id);
+    q.set("stylistId", stylist_id);
+    q.set("date", appointment_date);
+    q.set("time", appointment_time);
+    q.set("error", "slot");
+    q.set("message", slotCheck.message);
+    if (intake_session_id_raw) {
+      q.set("intakeSessionId", intake_session_id_raw);
+    }
+    redirect(`/dashboard/appointments/new?${q.toString()}`);
+  }
 
   const insertRow: Record<string, unknown> = {
     client_id,
@@ -373,7 +396,9 @@ export default async function DashboardNewAppointmentPage({
             ? params.message
             : params.error === "restricted"
               ? MANUAL_APPROVAL_BOOKING_MESSAGE
-              : "Unable to create appointment."}
+              : params.error === "slot"
+                ? "This time is not available for the selected stylist."
+                : "Unable to create appointment."}
         </div>
       ) : null}
 
@@ -601,6 +626,10 @@ export default async function DashboardNewAppointmentPage({
             />
           </div>
         </div>
+
+        <Suspense fallback={null}>
+          <BookingSlotValidationClient formId="new-appointment-form" />
+        </Suspense>
 
         <div style={helperTextStyle}>
           Open times below use working hours, blocked time, existing bookings, service duration, and service–stylist
