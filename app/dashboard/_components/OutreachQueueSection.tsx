@@ -55,6 +55,13 @@ export function OutreachQueueSection({ queue }: Props) {
                         </div>
                         <p style={contextStyle}>{item.dateContext}</p>
                         <p style={actionStyle}>{item.recommendedAction}</p>
+                        <div style={previewWrapStyle}>
+                          <p style={previewMetaStyle}>
+                            <span style={{ fontWeight: 700 }}>{item.template.internalLabel}</span>
+                            <span style={{ color: "#94a3b8" }}> · {item.template.shortActionLabel}</span>
+                          </p>
+                          <p style={previewTextStyle}>{item.template.previewText}</p>
+                        </div>
                       </div>
                       <div style={ctaRowStyle}>
                         {duplicateView ? (
@@ -207,6 +214,31 @@ const actionStyle: CSSProperties = {
   fontSize: 12,
   color: "#64748b",
   lineHeight: 1.4,
+};
+
+const previewWrapStyle: CSSProperties = {
+  marginTop: 10,
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  borderLeft: "3px solid #cbd5e1",
+};
+
+const previewMetaStyle: CSSProperties = {
+  margin: "0 0 6px 0",
+  fontSize: 11,
+  color: "#64748b",
+  textTransform: "none",
+  letterSpacing: "0.02em",
+};
+
+const previewTextStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  color: "#334155",
+  lineHeight: 1.5,
+  fontStyle: "italic",
 };
 
 const ctaRowStyle: CSSProperties = {

@@ -1,4 +1,12 @@
 import { newAppointmentHrefFromRebookingContext } from "@/app/lib/rebooking/bookingQuery";
+import {
+  appointmentReminderTemplate,
+  dueSoonRebookingTemplate,
+  overdueOutreachTemplate,
+  type OutreachTemplatePreview,
+} from "@/app/lib/outreach/templates";
+
+export type { OutreachTemplatePreview };
 
 export type OutreachQueueItemType =
   | "appointment_reminder"
@@ -26,6 +34,8 @@ export type OutreachQueueItem = {
   primaryActionLabel: string;
   /** Optional extra CTA (e.g. book another visit for reminder rows) */
   bookAppointmentHref?: string;
+  /** Reusable SMS-style preview — display only; not sent automatically */
+  template: OutreachTemplatePreview;
 };
 
 export type OutreachQueueGroup = {
@@ -152,6 +162,13 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
         ? `/dashboard/appointments/new?clientId=${encodeURIComponent(clientId)}`
         : undefined;
 
+      const template = appointmentReminderTemplate({
+        clientName,
+        serviceName,
+        appointmentDateTimeLabel: ctx,
+        stylistName,
+      });
+
       return {
         type: "appointment_reminder" as const,
         key: `ar-${row.id}`,
@@ -166,6 +183,7 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
         primaryActionHref: `/dashboard/appointments/${row.id}`,
         primaryActionLabel: "View Appointment",
         bookAppointmentHref,
+        template,
       };
     });
 
@@ -179,6 +197,15 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
       c.bookingRestricted
         ? " · Booking restricted — use staff approval workflow before booking."
         : "";
+    const template = dueSoonRebookingTemplate({
+      clientName: c.name,
+      serviceName: c.lastServiceName,
+      recommendedNextVisitISO: c.recommendedNextISO,
+      lastCompletedISO: c.lastCompletedISO,
+      stylistName,
+      daysUntilOrOverdue: c.daysUntilOrOverdue,
+      bookingRestricted: Boolean(c.bookingRestricted),
+    });
     return {
       type: "due_soon_rebooking" as const,
       key: `ds-${c.id}`,
@@ -193,6 +220,7 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
       viewClientHref: `/dashboard/clients/${c.id}`,
       primaryActionHref: cta.primaryActionHref,
       primaryActionLabel: cta.primaryActionLabel,
+      template,
     };
   });
 
@@ -210,6 +238,15 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
       c.bookingRestricted
         ? " · Booking restricted — use staff approval workflow before booking."
         : "";
+    const template = overdueOutreachTemplate({
+      clientName: c.name,
+      serviceName: c.lastServiceName,
+      recommendedNextVisitISO: c.recommendedNextISO,
+      lastCompletedISO: c.lastCompletedISO,
+      stylistName,
+      daysUntilOrOverdue: c.daysUntilOrOverdue,
+      bookingRestricted: Boolean(c.bookingRestricted),
+    });
     return {
       type: "overdue_outreach" as const,
       key: `ov-${c.id}`,
@@ -224,6 +261,7 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
       viewClientHref: `/dashboard/clients/${c.id}`,
       primaryActionHref: cta.primaryActionHref,
       primaryActionLabel: cta.primaryActionLabel,
+      template,
     };
   });
 

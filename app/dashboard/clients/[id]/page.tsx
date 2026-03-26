@@ -19,6 +19,7 @@ import {
   shouldBlockSelfServeBooking,
   shouldShowDepositRequiredWarning,
 } from "@/app/lib/bookingRules";
+import { rebookingOutreachTemplateForStatus } from "@/app/lib/outreach/templates";
 
 type Client = {
   id: string;
@@ -321,6 +322,24 @@ export default async function DashboardClientDetailPage({
     today: todayStart,
   });
 
+  const suggestedOutreachMessage =
+    (rebooking.rebooking_status === "due_soon" || rebooking.rebooking_status === "overdue") &&
+    rebooking.last_completed_date != null &&
+    rebooking.recommended_next_visit_date != null
+      ? rebookingOutreachTemplateForStatus(
+          rebooking.rebooking_status === "overdue" ? "overdue" : "due_soon",
+          {
+            clientName: fullName,
+            serviceName: rebooking.last_completed_service ?? null,
+            recommendedNextVisitISO: localDateISO(rebooking.recommended_next_visit_date),
+            lastCompletedISO: localDateISO(rebooking.last_completed_date),
+            stylistName: preferredStylistName ?? null,
+            daysUntilOrOverdue: rebooking.days_until_or_overdue ?? 0,
+            bookingRestricted,
+          },
+        )
+      : null;
+
   const rebookingCardAccent =
     rebooking.rebooking_status === "overdue"
       ? {
@@ -564,6 +583,33 @@ export default async function DashboardClientDetailPage({
                       <strong>Recommended outreach:</strong> Reach out by phone or text to book their next visit.
                       Salon AI does not send automated SMS or email yet—this note is for your front desk team.
                     </p>
+                    {suggestedOutreachMessage ? (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          paddingTop: 12,
+                          borderTop: "1px solid #e2e8f0",
+                        }}
+                      >
+                        <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700, color: "#64748b" }}>
+                          Suggested outreach message
+                        </p>
+                        <p style={{ margin: "0 0 6px", fontSize: 11, color: "#94a3b8" }}>
+                          {suggestedOutreachMessage.internalLabel} · {suggestedOutreachMessage.shortActionLabel}
+                        </p>
+                        <p
+                          style={{
+                            margin: 0,
+                            fontSize: 13,
+                            color: "#334155",
+                            lineHeight: 1.5,
+                            fontStyle: "italic",
+                          }}
+                        >
+                          {suggestedOutreachMessage.previewText}
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {recommendedLabel ? (
