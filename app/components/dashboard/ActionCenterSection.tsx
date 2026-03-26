@@ -51,13 +51,22 @@ export function ActionCenterSection({ items }: { items: ActionCenterItem[] }) {
                     {categoryLabel(item.category)} · {typeLabel(item.type)}
                   </span>
                   {item.clientName ? (
-                    <span style={clientNameStyle}>{item.clientName}</span>
+                    item.type === "gap" && item.gapBookingHref ? (
+                      <Link href={item.gapBookingHref} style={{ ...clientNameStyle, textDecoration: "none", color: "#0b57d0" }}>
+                        {item.clientName}
+                      </Link>
+                    ) : (
+                      <span style={clientNameStyle}>{item.clientName}</span>
+                    )
                   ) : (
                     <span style={clientNameMutedStyle}>—</span>
                   )}
                 </div>
                 <p style={timeStyle}>{item.timeContext}</p>
                 <p style={descStyle}>{item.description}</p>
+                {item.fitHint ? (
+                  <p style={fitHintStyle}>{item.fitHint}</p>
+                ) : null}
                 {item.stylistName ? (
                   <p style={stylistStyle}>
                     <strong>Stylist:</strong> {item.stylistName}
@@ -187,6 +196,14 @@ const descStyle: CSSProperties = {
   fontSize: 13,
   color: "#64748b",
   lineHeight: 1.45,
+};
+
+const fitHintStyle: CSSProperties = {
+  margin: "4px 0 0 0",
+  fontSize: 12,
+  color: "#0f766e",
+  fontWeight: 600,
+  lineHeight: 1.4,
 };
 
 const stylistStyle: CSSProperties = {

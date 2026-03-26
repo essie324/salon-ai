@@ -29,6 +29,8 @@ type SearchParams = {
   serviceId?: string;
   date?: string;
   time?: string;
+  /** "1" — opened from gap-fill / Action Center deep link */
+  gap?: string;
   error?: string;
   message?: string;
   /** "1" — arrived from rebooking CTA; show context panel when client matches */
@@ -155,6 +157,9 @@ async function createAppointment(formData: FormData) {
     q.set("time", appointment_time);
     q.set("error", "slot");
     q.set("message", slotCheck.message);
+    if (String(formData.get("from_gap") || "").trim() === "1") {
+      q.set("gap", "1");
+    }
     if (intake_session_id_raw) {
       q.set("intakeSessionId", intake_session_id_raw);
     }
@@ -407,6 +412,16 @@ export default async function DashboardNewAppointmentPage({
 
       {params.message && !params.error ? <div style={infoBoxStyle}>{params.message}</div> : null}
 
+      {params.gap === "1" ? (
+        <div style={infoBoxStyle}>
+          <strong>Gap suggestion</strong>
+          <span style={{ display: "block", marginTop: 6, fontSize: 14, fontWeight: 400, color: "#334155" }}>
+            Client, stylist, service, date, and time are prefilled when available. Adjust anything before
+            saving — the appointment is not created until you submit.
+          </span>
+        </div>
+      ) : null}
+
       {params.error ? (
         <div style={errorBoxStyle}>
           {params.error === "slot"
@@ -429,6 +444,7 @@ export default async function DashboardNewAppointmentPage({
             q.set("stylistId", s.stylistId);
             q.set("date", s.date);
             q.set("time", s.time);
+            if (params.gap === "1") q.set("gap", "1");
             if (params.intakeSessionId?.trim()) q.set("intakeSessionId", params.intakeSessionId.trim());
             if (params.consultationHint?.trim()) q.set("consultationHint", params.consultationHint.trim());
             if (params.intakeDecision?.trim()) q.set("intakeDecision", params.intakeDecision.trim());
@@ -537,6 +553,7 @@ export default async function DashboardNewAppointmentPage({
       ) : null}
 
       <form action={createAppointment} style={formStyle} id="new-appointment-form">
+        {params.gap === "1" ? <input type="hidden" name="from_gap" value="1" /> : null}
         {FEATURE_INBOX_AND_INTAKE_DB && intakePreview && intakeAlreadyLinked ? (
           <div style={intakeWarnStyle}>
             This intake session is already linked to an appointment. Clear the URL or pick another
@@ -687,6 +704,7 @@ export default async function DashboardNewAppointmentPage({
               clientId: params.clientId?.trim(),
               serviceId: effectiveServiceId,
               date: paramDateTrim,
+              gap: params.gap === "1" ? "1" : undefined,
               intakeSessionId: params.intakeSessionId?.trim(),
               consultationHint: params.consultationHint?.trim(),
               intakeDecision: params.intakeDecision?.trim(),

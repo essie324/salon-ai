@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { buildGapFillBookingUrl } from "@/app/lib/booking/gapBookingUrl";
+import { pickBestClientForGap, type GapFillRetentionClient } from "@/app/lib/gapFill/matchClients";
+
 export type GapFillSuggestion = {
   dateISO: string; // YYYY-MM-DD
   startTime: string; // HH:MM (local)
@@ -7,9 +10,18 @@ export type GapFillSuggestion = {
   durationMinutes: number;
   stylist: { id: string; name: string };
   suggestedService?: { id: string; name: string; durationMinutes: number };
-  suggestedClient?: { id: string; name: string; status: "due_soon" | "overdue" };
+  suggestedClient?: {
+    id: string;
+    name: string;
+    status: "due_soon" | "overdue";
+    reasonLabel?: string;
+  };
+  /** Why this client was chosen (best-fit ranking). */
+  matchReasonLabel?: string;
   bookingUrl: string;
 };
+
+export type { GapFillRetentionClient };
 
 type WorkingHourRow = {
   stylist_id: string;
@@ -38,13 +50,6 @@ type ServiceRow = {
   id: string;
   name: string | null;
   duration_minutes: number | null;
-};
-
-type RetentionClient = {
-  id: string;
-  name: string;
-  lastServiceName: string | null;
-  status: "due_soon" | "overdue";
 };
 
 type Interval = { startMin: number; endMin: number };
@@ -128,57 +133,13 @@ function pickServiceForGap(services: ServiceRow[], gapMinutes: number): ServiceR
   return candidates[0];
 }
 
-function normalize(s: string | null | undefined): string {
-  return (s ?? "").toLowerCase();
-}
-
-function clientMatchesService(client: RetentionClient, service: ServiceRow | null): boolean {
-  if (!service) return false;
-  const a = normalize(client.lastServiceName);
-  const b = normalize(service.name);
-  if (!a || !b) return false;
-  return a.includes(b) || b.includes(a);
-}
-
-function pickClientForGap(options: {
-  clients: RetentionClient[];
-  service: ServiceRow | null;
-}): RetentionClient | null {
-  const { clients, service } = options;
-  if (clients.length === 0) return null;
-
-  const overdue = clients.filter((c) => c.status === "overdue");
-  const dueSoon = clients.filter((c) => c.status === "due_soon");
-
-  const tryMatch = (pool: RetentionClient[]) => {
-    const match = pool.find((c) => clientMatchesService(c, service));
-    return match ?? null;
-  };
-
-  return (
-    tryMatch(overdue) ||
-    tryMatch(dueSoon) ||
-    overdue[0] ||
-    dueSoon[0] ||
-    null
-  );
-}
-
-function buildBookingUrl(options: { stylistId: string; dateISO: string; timeHHMM: string }): string {
-  const params = new URLSearchParams();
-  params.set("stylistId", options.stylistId);
-  params.set("date", options.dateISO);
-  params.set("time", options.timeHHMM);
-  return `/dashboard/appointments/new?${params.toString()}`;
-}
-
 const OCCUPYING_STATUSES = new Set(["scheduled", "confirmed", "checked_in", "completed"]);
 
 export async function getGapFillSuggestionsForDate(options: {
   supabase: SupabaseClient;
   dateISO: string; // YYYY-MM-DD (local date)
   minGapMinutes?: number; // default 30
-  retentionClients: RetentionClient[]; // due soon + overdue; already computed elsewhere
+  retentionClients: GapFillRetentionClient[];
 }): Promise<GapFillSuggestion[]> {
   const { supabase, dateISO } = options;
   const minGapMinutes = options.minGapMinutes ?? 30;
@@ -283,8 +244,36 @@ export async function getGapFillSuggestionsForDate(options: {
       // but keep an extra guard in case working hours were missing.
       if (durationMinutes < minGapMinutes) continue;
 
-      const pickedService = pickServiceForGap(serviceList, durationMinutes);
-      const pickedClient = pickClientForGap({ clients: retentionPool, service: pickedService });
+      const match = pickBestClientForGap({
+        gapMinutes: durationMinutes,
+        stylistId: s.id,
+        services: serviceList,
+        candidates: retentionPool,
+      });
+
+      const fallbackService = match ? null : pickServiceForGap(serviceList, durationMinutes);
+      const suggestedService = match
+        ? {
+            id: match.service.id,
+            name: match.service.name,
+            durationMinutes: match.service.durationMinutes,
+          }
+        : fallbackService
+          ? {
+              id: fallbackService.id,
+              name: fallbackService.name ?? "Service",
+              durationMinutes: fallbackService.duration_minutes ?? 60,
+            }
+          : undefined;
+
+      const suggestedClient = match
+        ? {
+            id: match.client.id,
+            name: match.client.name,
+            status: match.client.status,
+            reasonLabel: match.reasonLabel,
+          }
+        : undefined;
 
       suggestions.push({
         dateISO,
@@ -292,17 +281,16 @@ export async function getGapFillSuggestionsForDate(options: {
         endTime: toHHMM(g.endMin),
         durationMinutes,
         stylist: { id: s.id, name: stylistName },
-        suggestedService: pickedService
-          ? {
-              id: pickedService.id,
-              name: pickedService.name ?? "Service",
-              durationMinutes: pickedService.duration_minutes ?? 60,
-            }
-          : undefined,
-        suggestedClient: pickedClient
-          ? { id: pickedClient.id, name: pickedClient.name, status: pickedClient.status }
-          : undefined,
-        bookingUrl: buildBookingUrl({ stylistId: s.id, dateISO, timeHHMM: toHHMM(g.startMin) }),
+        suggestedService,
+        suggestedClient,
+        matchReasonLabel: match?.reasonLabel,
+        bookingUrl: buildGapFillBookingUrl({
+          stylistId: s.id,
+          dateISO,
+          timeHHMM: toHHMM(g.startMin),
+          clientId: suggestedClient?.id,
+          serviceId: suggestedService?.id,
+        }),
       });
     }
   }

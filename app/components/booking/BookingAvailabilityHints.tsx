@@ -10,6 +10,8 @@ export type BookingAvailabilityBaseQuery = {
   clientId?: string;
   serviceId: string;
   date: string;
+  /** Preserve gap-fill deep link when picking an alternate slot */
+  gap?: string;
   intakeSessionId?: string;
   consultationHint?: string;
   intakeDecision?: string;
@@ -27,6 +29,7 @@ function buildHref(slot: BookableSlot, base: BookingAvailabilityBaseQuery): stri
   if (base.consultationHint?.trim()) q.set("consultationHint", base.consultationHint.trim());
   if (base.intakeDecision?.trim()) q.set("intakeDecision", base.intakeDecision.trim());
   if (base.rebook?.trim()) q.set("rebook", base.rebook.trim());
+  if (base.gap === "1") q.set("gap", "1");
   return `/dashboard/appointments/new?${q.toString()}`;
 }
 

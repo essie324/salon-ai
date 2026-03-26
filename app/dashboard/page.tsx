@@ -512,35 +512,64 @@ export default async function DashboardPage() {
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
               {summary.gapFill.suggestions.map((g) => (
-                <li key={`${g.stylist.id}-${g.startTime}`} style={{ padding: "10px 0", borderBottom: "1px solid #f0f0f0" }}>
+                <li
+                  key={`${g.dateISO}-${g.stylist.id}-${g.startTime}-${g.endTime}`}
+                  style={{ padding: "10px 0", borderBottom: "1px solid #f0f0f0" }}
+                >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 520 }}>
                       <span style={{ fontWeight: 800, fontSize: 14 }}>
                         {g.startTime}–{g.endTime} · {g.durationMinutes} min
                       </span>
                       <span style={{ fontSize: 12, color: "#555" }}>
                         {g.stylist.name}
                         {g.suggestedService ? ` · ${g.suggestedService.name}` : ""}
-                        {g.suggestedClient ? ` · ${g.suggestedClient.name} (${g.suggestedClient.status === "overdue" ? "overdue" : "due soon"})` : ""}
                       </span>
+                      {g.suggestedClient ? (
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>
+                          Suggested:{" "}
+                          <Link href={g.bookingUrl} style={{ color: "#0b57d0", textDecoration: "none" }}>
+                            {g.suggestedClient.name}
+                          </Link>
+                          {g.matchReasonLabel ? (
+                            <span style={{ fontWeight: 500, color: "#0f766e" }}> — {g.matchReasonLabel}</span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 12, color: "#888" }}>No retention match — pick any client</span>
+                      )}
                     </div>
-                    <Link
-                      href={g.bookingUrl}
-                      style={{
-                        textDecoration: "none",
-                        padding: "8px 12px",
-                        borderRadius: 10,
-                        border: "1px solid #d4d4d4",
-                        background: "#fff",
-                        color: "#111",
-                        fontWeight: 800,
-                        fontSize: 13,
-                        whiteSpace: "nowrap",
-                        alignSelf: "flex-start",
-                      }}
-                    >
-                      Book into gap →
-                    </Link>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+                      <Link
+                        href={g.bookingUrl}
+                        style={{
+                          textDecoration: "none",
+                          padding: "8px 12px",
+                          borderRadius: 10,
+                          border: "1px solid #111",
+                          background: "#111",
+                          color: "#fff",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Book slot
+                      </Link>
+                      {g.suggestedClient ? (
+                        <Link
+                          href={`/dashboard/clients/${g.suggestedClient.id}`}
+                          style={{
+                            textDecoration: "none",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: "#444",
+                          }}
+                        >
+                          View client
+                        </Link>
+                      ) : null}
+                    </div>
                   </div>
                 </li>
               ))}

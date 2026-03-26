@@ -32,6 +32,10 @@ export type ActionCenterItem = {
   stylistName: string | null;
   timeContext: string;
   description: string;
+  /** Best-fit label for gap rows (from `matchClients`). */
+  fitHint?: string | null;
+  /** Same as Book CTA — used to link the suggested client name for one-click booking. */
+  gapBookingHref?: string | null;
   ctas: ActionCenterCta[];
 };
 
@@ -118,10 +122,11 @@ export function buildTodaysActionCenter(input: BuildTodaysActionCenterInput): { 
   for (const g of gapFillToday) {
     const clientName = g.suggestedClient?.name ?? null;
     const stylistName = g.stylist.name;
-    const ctas: ActionCenterCta[] = [{ kind: "book", href: g.bookingUrl, label: "Book" }];
+    const ctas: ActionCenterCta[] = [{ kind: "book", href: g.bookingUrl, label: "Book slot" }];
     if (g.suggestedClient) {
       ctas.push({ kind: "view_client", href: `/dashboard/clients/${g.suggestedClient.id}` });
     }
+    const fitHint = g.matchReasonLabel ?? g.suggestedClient?.reasonLabel ?? null;
     items.push({
       id: `gap-${g.dateISO}-${g.stylist.id}-${g.startTime}-${g.endTime}`,
       category: "revenue",
@@ -134,6 +139,8 @@ export function buildTodaysActionCenter(input: BuildTodaysActionCenterInput): { 
       description: g.suggestedService
         ? `Open slot — ${g.suggestedService.name} fits · fill last-minute revenue`
         : "Open slot on the books — book a fill-in",
+      fitHint,
+      gapBookingHref: g.bookingUrl,
       ctas,
     });
   }
@@ -141,10 +148,11 @@ export function buildTodaysActionCenter(input: BuildTodaysActionCenterInput): { 
   for (const g of gapFillTomorrow) {
     const clientName = g.suggestedClient?.name ?? null;
     const stylistName = g.stylist.name;
-    const ctas: ActionCenterCta[] = [{ kind: "book", href: g.bookingUrl, label: "Book" }];
+    const ctas: ActionCenterCta[] = [{ kind: "book", href: g.bookingUrl, label: "Book slot" }];
     if (g.suggestedClient) {
       ctas.push({ kind: "view_client", href: `/dashboard/clients/${g.suggestedClient.id}` });
     }
+    const fitHint = g.matchReasonLabel ?? g.suggestedClient?.reasonLabel ?? null;
     items.push({
       id: `gap-${g.dateISO}-${g.stylist.id}-${g.startTime}-${g.endTime}`,
       category: "revenue",
@@ -157,6 +165,8 @@ export function buildTodaysActionCenter(input: BuildTodaysActionCenterInput): { 
       description: g.suggestedService
         ? `Tomorrow · open slot — ${g.suggestedService.name} suggested`
         : "Tomorrow · open slot — book ahead",
+      fitHint,
+      gapBookingHref: g.bookingUrl,
       ctas,
     });
   }

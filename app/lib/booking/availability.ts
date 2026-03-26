@@ -26,6 +26,22 @@ export function minutesToHHmm(total: number): string {
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+/**
+ * Local calendar YYYY-MM-DD (runtime timezone). Matches how `getBookableSlotsForServiceDate`
+ * and `new Date(\`${date}T${time}\`)` interpret the salon wall clock on the server.
+ */
+function localDateYYYYMMDD(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Local HH:mm (runtime timezone), comparable to DB TIME strings. */
+function localTimeHHmm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 export async function isStylistAvailable(
   supabase: SupabaseClient,
   stylistId: string,
@@ -38,11 +54,13 @@ export async function isStylistAvailable(
 
   const start = new Date(startAt);
   const end = new Date(endAt);
-  const appointment_date = start.toISOString().slice(0, 10);
-  const startTime = toHHmm(start.toISOString().slice(11, 16));
-  const endTime = toHHmm(end.toISOString().slice(11, 16));
+  // Must NOT use toISOString() for date/time-of-day: DB working hours and blocks are wall-clock
+  // in the same local frame as getBookableSlotsForServiceDate (see suggestions.ts).
+  const appointment_date = localDateYYYYMMDD(start);
+  const startTime = localTimeHHmm(start);
+  const endTime = localTimeHHmm(end);
 
-  // Working hours
+  // Working hours — same day-of-week rule as suggestions.ts (local noon anchor)
   const dayOfWeek = new Date(appointment_date + "T12:00:00").getDay();
 
   const { data: workingRows, error: workingError } = await supabase

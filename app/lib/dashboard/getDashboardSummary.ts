@@ -11,6 +11,7 @@ import type { AppointmentRevenueRow, RevenueInsights } from "@/app/lib/revenue/m
 import { getDashboardRevenueInsights } from "@/app/lib/dashboard/revenueRules";
 import { getCurrentMonthRangeISO, getCurrentWeekRangeISO, localDateISO } from "./dateRanges";
 import { formatLocalISO, startOfLocalDay } from "@/app/lib/retention";
+import type { GapFillRetentionClient } from "@/app/lib/gapFill/matchClients";
 import { getGapFillSuggestionsForDate, type GapFillSuggestion } from "@/app/lib/scheduling/optimizer";
 import { addCalendarDays } from "@/app/lib/calendar/schedulerData";
 import {
@@ -706,12 +707,26 @@ export async function getDashboardSummary(
     }));
 
   const tomorrowISO = addCalendarDays(todayISO, 1);
-  const retentionPoolForGaps = opportunities.slice(0, 30).map((r) => ({
-    id: r.id,
-    name: r.name,
-    lastServiceName: r.lastServiceName,
-    status: r.status,
-  }));
+  const retentionPoolForGaps: GapFillRetentionClient[] = [
+    ...overdue.slice(0, 25).map((r) => ({
+      id: r.id,
+      name: r.name,
+      lastServiceName: r.lastServiceName,
+      lastServiceId: r.lastServiceId,
+      preferredStylistId: r.preferredStylistId,
+      status: "overdue" as const,
+      hasVisitMemory: r.hasVisitMemory,
+    })),
+    ...dueSoon.slice(0, 25).map((r) => ({
+      id: r.id,
+      name: r.name,
+      lastServiceName: r.lastServiceName,
+      lastServiceId: r.lastServiceId,
+      preferredStylistId: r.preferredStylistId,
+      status: "due_soon" as const,
+      hasVisitMemory: r.hasVisitMemory,
+    })),
+  ].slice(0, 40);
 
   const [
     gapFillSuggestions,
