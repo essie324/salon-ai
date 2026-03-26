@@ -550,6 +550,22 @@ export default async function DashboardClientDetailPage({
                       : `${rebooking.days_until_or_overdue} day${rebooking.days_until_or_overdue === 1 ? "" : "s"} until recommended date`}
                   </p>
                 ) : null}
+                {rebooking.rebooking_status === "due_soon" || rebooking.rebooking_status === "overdue" ? (
+                  <div
+                    style={{
+                      marginTop: 14,
+                      padding: 12,
+                      borderRadius: 10,
+                      background: "#f8fafc",
+                      border: "1px solid #e2e8f0",
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: 13, color: "#334155", lineHeight: 1.5 }}>
+                      <strong>Recommended outreach:</strong> Reach out by phone or text to book their next visit.
+                      Salon AI does not send automated SMS or email yet—this note is for your front desk team.
+                    </p>
+                  </div>
+                ) : null}
                 {recommendedLabel ? (
                   <div style={{ marginTop: 14 }}>
                     <Link href={bookNextHref} style={primaryButtonStyle}>

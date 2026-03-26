@@ -11,6 +11,7 @@ import {
   NO_SHOW_DEPOSIT_THRESHOLD,
   NO_SHOW_RESTRICT_THRESHOLD,
 } from "@/app/lib/bookingRules";
+import { OutreachQueueSection } from "./_components/OutreachQueueSection";
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient();
@@ -209,6 +210,10 @@ export default async function DashboardPage() {
             </p>
           </div>
         </Link>
+      </div>
+
+      <div style={{ marginBottom: 32 }}>
+        <OutreachQueueSection queue={summary.outreachQueue} />
       </div>
 
       <div

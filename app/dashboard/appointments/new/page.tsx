@@ -19,7 +19,9 @@ import { getStylistIdsEligibleForService } from "@/app/lib/stylistServiceEligibi
 import { BookingAvailabilityHints } from "@/app/components/booking/BookingAvailabilityHints";
 import { ShowOpenTimesButton } from "@/app/components/booking/ShowOpenTimesButton";
 import { BookingSlotValidationClient } from "../../../components/booking/BookingSlotValidationClient";
+import { BookingFallbackSuggestions } from "@/app/components/booking/BookingFallbackSuggestions";
 import { validateBookingSlot } from "@/app/lib/booking/conflicts";
+import { getSmartFallbackSuggestions } from "@/app/lib/booking/smartSuggestions";
 
 type SearchParams = {
   clientId?: string;
@@ -359,6 +361,21 @@ export default async function DashboardNewAppointmentPage({
         })
       : null;
 
+  const slotErrorTime = params.time?.trim();
+  const slotFallbackSuggestions =
+    params.error === "slot" &&
+    effectiveServiceId &&
+    effectiveStylistId &&
+    paramDateTrim &&
+    slotErrorTime
+      ? await getSmartFallbackSuggestions(supabase, stylists, {
+          serviceId: effectiveServiceId,
+          appointmentDate: paramDateTrim,
+          appointmentTime: slotErrorTime,
+          preferredStylistId: effectiveStylistId,
+        })
+      : [];
+
   const isRebookFlow = params.rebook === "1" || params.rebook === "true";
   const showRebookPanel =
     isRebookFlow && selectedClient != null && params.date?.trim();
@@ -392,14 +409,33 @@ export default async function DashboardNewAppointmentPage({
 
       {params.error ? (
         <div style={errorBoxStyle}>
-          {params.message?.trim()
-            ? params.message
-            : params.error === "restricted"
-              ? MANUAL_APPROVAL_BOOKING_MESSAGE
-              : params.error === "slot"
-                ? "This time is not available for the selected stylist."
+          {params.error === "slot"
+            ? "This time is not available for the selected stylist."
+            : params.message?.trim()
+              ? params.message
+              : params.error === "restricted"
+                ? MANUAL_APPROVAL_BOOKING_MESSAGE
                 : "Unable to create appointment."}
         </div>
+      ) : null}
+
+      {params.error === "slot" && slotFallbackSuggestions.length > 0 ? (
+        <BookingFallbackSuggestions
+          suggestions={slotFallbackSuggestions}
+          buildHref={(s) => {
+            const q = new URLSearchParams();
+            if (params.clientId?.trim()) q.set("clientId", params.clientId.trim());
+            q.set("serviceId", effectiveServiceId);
+            q.set("stylistId", s.stylistId);
+            q.set("date", s.date);
+            q.set("time", s.time);
+            if (params.intakeSessionId?.trim()) q.set("intakeSessionId", params.intakeSessionId.trim());
+            if (params.consultationHint?.trim()) q.set("consultationHint", params.consultationHint.trim());
+            if (params.intakeDecision?.trim()) q.set("intakeDecision", params.intakeDecision.trim());
+            if (params.rebook?.trim()) q.set("rebook", params.rebook.trim());
+            return `/dashboard/appointments/new?${q.toString()}`;
+          }}
+        />
       ) : null}
 
       {selectedClient && shouldShowDepositRequiredWarning(selectedClient) ? (

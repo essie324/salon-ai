@@ -12,6 +12,12 @@ import { getDashboardRevenueInsights } from "@/app/lib/dashboard/revenueRules";
 import { getCurrentMonthRangeISO, getCurrentWeekRangeISO, localDateISO } from "./dateRanges";
 import { formatLocalISO, startOfLocalDay } from "@/app/lib/retention";
 import { getGapFillSuggestionsForDate, type GapFillSuggestion } from "@/app/lib/scheduling/optimizer";
+import { addCalendarDays } from "@/app/lib/calendar/schedulerData";
+import {
+  buildOutreachQueue,
+  type OutreachQueueResult,
+  type ReminderAppointmentRow,
+} from "@/app/lib/outreach/queue";
 
 type MoneySummary = {
   revenueCents: number;
@@ -144,6 +150,9 @@ export type DashboardSummary = {
     dateISO: string;
     suggestions: GapFillSuggestion[];
   };
+
+  /** Daily outreach actions (reminders + rebooking nudges); display-only — no automations. */
+  outreachQueue: OutreachQueueResult;
 };
 
 function nameFromParts(first?: string | null, last?: string | null) {
@@ -157,6 +166,9 @@ export async function getDashboardSummary(
   const todayISO = localDateISO(now);
   const week = getCurrentWeekRangeISO(now);
   const month = getCurrentMonthRangeISO(now);
+
+  const reminderRangeStart = addCalendarDays(todayISO, 1);
+  const reminderRangeEnd = addCalendarDays(todayISO, 2);
 
   const [
     { count: clientsCount },
@@ -174,6 +186,7 @@ export async function getDashboardSummary(
     { data: recentCompletedAppointments },
     { data: clients },
     { data: memoryJoinRows },
+    { data: upcomingReminderAppointments },
   ] = await Promise.all([
     supabase.from("clients").select("*", { count: "exact", head: true }),
     supabase.from("appointments").select("*", { count: "exact", head: true }),
@@ -257,6 +270,14 @@ export async function getDashboardSummary(
       .from("appointment_memories")
       .select("appointment_id, appointments!inner(client_id)")
       .limit(2000),
+
+    supabase
+      .from("appointments")
+      .select("id, client_id, stylist_id, service_id, appointment_date, start_at, status")
+      .is("deleted_at", null)
+      .in("status", ["scheduled", "confirmed"])
+      .gte("appointment_date", reminderRangeStart)
+      .lte("appointment_date", reminderRangeEnd),
   ]);
 
   const weekRevenueInsights = getDashboardRevenueInsights(
@@ -397,6 +418,7 @@ export async function getDashboardSummary(
     status: "due_soon" | "overdue";
     hasVisitMemory: boolean;
     daysUntilOrOverdue: number;
+    bookingRestricted: boolean;
   };
 
   type RebookingClientRow = {
@@ -521,6 +543,9 @@ export async function getDashboardSummary(
 
     const retentionStatus = decision.rebooking_status;
 
+    const bookingRestricted =
+      (client as { booking_restricted?: boolean | null }).booking_restricted === true;
+
     allRetention.push({
       id: clientId,
       name: nameFromParts(client.first_name, client.last_name),
@@ -533,6 +558,7 @@ export async function getDashboardSummary(
       status: retentionStatus,
       hasVisitMemory,
       daysUntilOrOverdue: decision.days_until_or_overdue ?? 0,
+      bookingRestricted,
     });
   }
 
@@ -577,6 +603,42 @@ export async function getDashboardSummary(
         r.status === "overdue" || r.recommendedDate.getTime() <= opportunityEnd.getTime(),
     )
     .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
+
+  const outreachQueue = buildOutreachQueue({
+    now,
+    reminderAppointments: (upcomingReminderAppointments ?? []) as ReminderAppointmentRow[],
+    dueSoon: dueSoon.slice(0, 20).map((r) => ({
+      id: r.id,
+      name: r.name,
+      lastServiceName: r.lastServiceName,
+      lastServiceId: r.lastServiceId,
+      preferredStylistId: r.preferredStylistId,
+      lastCompletedISO: r.lastCompletedISO,
+      recommendedNextISO: r.recommendedNextISO,
+      daysUntilOrOverdue: r.daysUntilOrOverdue,
+      hasVisitMemory: r.hasVisitMemory,
+      bookingRestricted: r.bookingRestricted,
+    })),
+    overdue: overdue.slice(0, 20).map((r) => ({
+      id: r.id,
+      name: r.name,
+      lastServiceName: r.lastServiceName,
+      lastServiceId: r.lastServiceId,
+      preferredStylistId: r.preferredStylistId,
+      lastCompletedISO: r.lastCompletedISO,
+      recommendedNextISO: r.recommendedNextISO,
+      daysUntilOrOverdue: r.daysUntilOrOverdue,
+      hasVisitMemory: r.hasVisitMemory,
+      bookingRestricted: r.bookingRestricted,
+    })),
+    clientNameById: new Map(
+      (clients ?? []).map((c) => [c.id, nameFromParts(c.first_name, c.last_name)]),
+    ),
+    stylistNameById: new Map(
+      (stylists ?? []).map((s) => [s.id, nameFromParts(s.first_name, s.last_name)]),
+    ),
+    serviceNameById: new Map((services ?? []).map((s) => [s.id, s.name ?? "Unnamed Service"])),
+  });
 
   const clientIntelligenceAtRisk = atRiskClientsAll
     .slice()
@@ -698,5 +760,6 @@ export async function getDashboardSummary(
       dateISO: todayISO,
       suggestions: gapFillSuggestions,
     },
+    outreachQueue,
   };
 }

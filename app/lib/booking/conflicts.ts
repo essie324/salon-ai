@@ -100,6 +100,8 @@ export async function checkAppointmentConflict(
 /**
  * Working hours + blocked time + no overlapping appointments (same rules as booking engine).
  * No manual bypass: always enforced server-side.
+ *
+ * For alternatives when this fails, see {@link getSmartFallbackSuggestions} in `./smartSuggestions`.
  */
 export async function validateBookingSlot(
   supabase: SupabaseClient,

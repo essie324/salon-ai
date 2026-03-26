@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, type CSSProperties } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
@@ -6,13 +6,9 @@ import {
   validateBookingSlot,
   BOOKING_UNAVAILABLE_MESSAGE,
 } from "@/app/lib/booking/conflicts";
-import {
-  getSuggestedTimeSlots,
-  getAlternateStylistSuggestions,
-  formatSuggestionsTry,
-  formatAlternateStylists,
-} from "@/app/lib/stylistAvailability";
 import { isStylistEligibleForService } from "@/app/lib/stylistServiceEligibility";
+import { getSmartFallbackSuggestions } from "@/app/lib/booking/smartSuggestions";
+import { BookingFallbackSuggestions } from "@/app/components/booking/BookingFallbackSuggestions";
 import { determineConsultationRouting } from "@/app/lib/booking/consultationRouting";
 import { computeDepositPolicy } from "@/app/lib/booking/depositRules";
 import { parsePhotoUrlsInput, photoUrlsToTextareaValue } from "@/app/lib/visitMemory";
@@ -122,31 +118,13 @@ async function updateAppointment(id: string, formData: FormData) {
   });
 
   if (!slotCheck.ok) {
-    const [suggestions, { alternates }] = await Promise.all([
-      getSuggestedTimeSlots(supabase, {
-        stylist_id,
-        appointment_date,
-        durationMinutes,
-        excludeAppointmentId: id,
-      }),
-      getAlternateStylistSuggestions(supabase, {
-        appointment_date,
-        appointment_time,
-        durationMinutes,
-        selectedStylistId: stylist_id,
-        service_id,
-        excludeAppointmentId: id,
-      }),
-    ]);
-    let message =
-      BOOKING_UNAVAILABLE_MESSAGE +
-      (suggestions.length > 0 ? " " + formatSuggestionsTry(suggestions) : "");
-    if (alternates.length > 0) {
-      message += " Available alternatives: " + formatAlternateStylists(alternates) + ".";
-    }
-    redirect(
-      `/dashboard/appointments/${id}/edit?error=slot&message=${encodeURIComponent(message)}`
-    );
+    const q = new URLSearchParams();
+    q.set("error", "slot");
+    q.set("serviceId", service_id);
+    q.set("stylistId", stylist_id);
+    q.set("date", appointment_date);
+    q.set("time", appointment_time);
+    redirect(`/dashboard/appointments/${id}/edit?${q.toString()}`);
   }
 
   const { error } = await supabase
@@ -237,7 +215,14 @@ export default async function DashboardAppointmentEditPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ error?: string; message?: string }>;
+  searchParams?: Promise<{
+    error?: string;
+    message?: string;
+    serviceId?: string;
+    stylistId?: string;
+    date?: string;
+    time?: string;
+  }>;
 }) {
   const supabase = await createSupabaseServerClient();
   const { id } = await params;
@@ -257,8 +242,8 @@ export default async function DashboardAppointmentEditPage({
       ? resolvedSearch.message
       : BOOKING_UNAVAILABLE_MESSAGE;
   const slotMessage =
-    resolvedSearch?.error === "slot" && resolvedSearch?.message
-      ? resolvedSearch.message
+    resolvedSearch?.error === "slot"
+      ? "This time is not available for the selected stylist."
       : BOOKING_UNAVAILABLE_MESSAGE;
   const eligibilityMessage =
     resolvedSearch?.error === "eligibility" && resolvedSearch?.message
@@ -338,6 +323,30 @@ export default async function DashboardAppointmentEditPage({
   const serviceList = services ?? [];
   const stylistList = stylists ?? [];
 
+  const prefServiceId = resolvedSearch?.serviceId?.trim() || (appt.service_id ?? "");
+  const prefStylistId = resolvedSearch?.stylistId?.trim() || (appt.stylist_id ?? "");
+  const prefDate = resolvedSearch?.date?.trim() || toDateInputValue(appt.start_at);
+  const prefTime = resolvedSearch?.time?.trim() || toTimeInputValue(appt.start_at);
+
+  const slotFallbackSuggestions =
+    showSlotError && prefServiceId && prefStylistId && prefDate && prefTime
+      ? await getSmartFallbackSuggestions(
+          supabase,
+          stylistList as {
+            id: string;
+            first_name: string | null;
+            last_name: string | null;
+          }[],
+          {
+            serviceId: prefServiceId,
+            appointmentDate: prefDate,
+            appointmentTime: prefTime,
+            preferredStylistId: prefStylistId,
+            excludeAppointmentId: id,
+          },
+        )
+      : [];
+
   return (
     <div style={mainStyle}>
       <div style={headerRowStyle}>
@@ -388,19 +397,34 @@ export default async function DashboardAppointmentEditPage({
       ) : null}
 
       {showSlotError ? (
-        <div
-          style={{
-            marginBottom: 18,
-            padding: "14px 18px",
-            borderRadius: 12,
-            background: "#fef2f2",
-            color: "#b91c1c",
-            fontSize: 14,
-            fontWeight: 600,
-          }}
-        >
-          {slotMessage}
-        </div>
+        <>
+          <div
+            style={{
+              marginBottom: 18,
+              padding: "14px 18px",
+              borderRadius: 12,
+              background: "#fef2f2",
+              color: "#b91c1c",
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            {slotMessage}
+          </div>
+          {slotFallbackSuggestions.length > 0 ? (
+            <BookingFallbackSuggestions
+              suggestions={slotFallbackSuggestions}
+              buildHref={(s) => {
+                const q = new URLSearchParams();
+                q.set("serviceId", prefServiceId);
+                q.set("stylistId", s.stylistId);
+                q.set("date", s.date);
+                q.set("time", s.time);
+                return `/dashboard/appointments/${id}/edit?${q.toString()}`;
+              }}
+            />
+          ) : null}
+        </>
       ) : null}
 
       {showConsultationError ? (
@@ -492,7 +516,7 @@ export default async function DashboardAppointmentEditPage({
             name="service_id"
             required
             style={inputStyle}
-            defaultValue={appt.service_id ?? ""}
+            defaultValue={prefServiceId}
           >
             <option value="" disabled>
               Select a service
@@ -517,7 +541,7 @@ export default async function DashboardAppointmentEditPage({
             name="stylist_id"
             required
             style={inputStyle}
-            defaultValue={appt.stylist_id ?? ""}
+            defaultValue={prefStylistId}
           >
             <option value="" disabled>
               Select a stylist
@@ -541,7 +565,7 @@ export default async function DashboardAppointmentEditPage({
               type="date"
               required
               style={inputStyle}
-              defaultValue={toDateInputValue(appt.start_at)}
+              defaultValue={prefDate}
             />
           </div>
           <div>
@@ -554,7 +578,7 @@ export default async function DashboardAppointmentEditPage({
               type="time"
               required
               style={inputStyle}
-              defaultValue={toTimeInputValue(appt.start_at)}
+              defaultValue={prefTime}
             />
             <p style={{ margin: "6px 0 0", fontSize: 12, color: "#666" }}>
               Availability is checked against service duration, stylist hours, blocked time, and existing bookings.
@@ -789,20 +813,20 @@ export default async function DashboardAppointmentEditPage({
   );
 }
 
-const mainStyle: React.CSSProperties = {
+const mainStyle: CSSProperties = {
   maxWidth: 720,
 };
 
-const headerRowStyle: React.CSSProperties = {
+const headerRowStyle: CSSProperties = {
   marginBottom: 24,
 };
 
-const titleStyle: React.CSSProperties = {
+const titleStyle: CSSProperties = {
   fontSize: "1.75rem",
   margin: "8px 0 4px 0",
 };
 
-const cardStyle: React.CSSProperties = {
+const cardStyle: CSSProperties = {
   background: "#fff",
   border: "1px solid #e5e5e5",
   borderRadius: 18,
@@ -810,28 +834,28 @@ const cardStyle: React.CSSProperties = {
   boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
 };
 
-const backLinkStyle: React.CSSProperties = {
+const backLinkStyle: CSSProperties = {
   textDecoration: "none",
   color: "#111",
   fontWeight: 700,
   fontSize: 14,
 };
 
-const errorBoxStyle: React.CSSProperties = {
+const errorBoxStyle: CSSProperties = {
   background: "#ffe5e5",
   color: "#900",
   padding: 16,
   borderRadius: 12,
 };
 
-const labelStyle: React.CSSProperties = {
+const labelStyle: CSSProperties = {
   display: "block",
   marginBottom: 8,
   fontWeight: 700,
   fontSize: 14,
 };
 
-const inputStyle: React.CSSProperties = {
+const inputStyle: CSSProperties = {
   width: "100%",
   padding: "12px 14px",
   borderRadius: 12,
@@ -842,7 +866,7 @@ const inputStyle: React.CSSProperties = {
   boxSizing: "border-box",
 };
 
-const submitButtonStyle: React.CSSProperties = {
+const submitButtonStyle: CSSProperties = {
   padding: "14px 18px",
   borderRadius: 12,
   border: "none",
