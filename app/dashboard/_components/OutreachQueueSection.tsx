@@ -42,7 +42,7 @@ export function OutreachQueueSection({ queue }: Props) {
                 {g.items.map((item) => {
                   const duplicateView =
                     item.primaryActionHref === item.viewClientHref &&
-                    item.primaryActionLabel === "View client";
+                    item.primaryActionLabel === "View Client";
                   return (
                     <li key={item.key} style={rowStyle}>
                       <div style={{ flex: "1 1 220px", minWidth: 0 }}>
@@ -59,16 +59,21 @@ export function OutreachQueueSection({ queue }: Props) {
                       <div style={ctaRowStyle}>
                         {duplicateView ? (
                           <Link href={item.viewClientHref} style={primaryLinkStyle}>
-                            View client
+                            View Client
                           </Link>
                         ) : (
                           <>
                             <Link href={item.viewClientHref} style={secondaryLinkStyle}>
-                              View client
+                              View Client
                             </Link>
                             <Link href={item.primaryActionHref} style={primaryLinkStyle}>
                               {item.primaryActionLabel}
                             </Link>
+                            {item.bookAppointmentHref ? (
+                              <Link href={item.bookAppointmentHref} style={secondaryLinkStyle}>
+                                Book Appointment
+                              </Link>
+                            ) : null}
                           </>
                         )}
                       </div>

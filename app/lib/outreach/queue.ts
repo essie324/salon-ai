@@ -24,6 +24,8 @@ export type OutreachQueueItem = {
   /** Book (rebooking) or view existing appointment */
   primaryActionHref: string;
   primaryActionLabel: string;
+  /** Optional extra CTA (e.g. book another visit for reminder rows) */
+  bookAppointmentHref?: string;
 };
 
 export type OutreachQueueGroup = {
@@ -84,7 +86,7 @@ function rebookingPrimaryCta(
   if (c.bookingRestricted) {
     return {
       primaryActionHref: `/dashboard/clients/${c.id}`,
-      primaryActionLabel: "View client",
+      primaryActionLabel: "View Client",
     };
   }
   const bookHref = newAppointmentHrefFromRebookingContext({
@@ -96,7 +98,7 @@ function rebookingPrimaryCta(
   });
   return {
     primaryActionHref: bookHref,
-    primaryActionLabel: "Book appointment",
+    primaryActionLabel: "Book Appointment",
   };
 }
 
@@ -146,6 +148,10 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
       const stylistBit = stylistName ? ` with ${stylistName}` : "";
       const serviceBit = serviceName ? ` · ${serviceName}` : "";
 
+      const bookAppointmentHref = clientId
+        ? `/dashboard/appointments/new?clientId=${encodeURIComponent(clientId)}`
+        : undefined;
+
       return {
         type: "appointment_reminder" as const,
         key: `ar-${row.id}`,
@@ -158,7 +164,8 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
         recommendedAction: `Confirm or remind${stylistBit}${serviceBit}`,
         viewClientHref: clientId ? `/dashboard/clients/${clientId}` : "/dashboard/clients",
         primaryActionHref: `/dashboard/appointments/${row.id}`,
-        primaryActionLabel: "View appointment",
+        primaryActionLabel: "View Appointment",
+        bookAppointmentHref,
       };
     });
 

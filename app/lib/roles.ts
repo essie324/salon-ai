@@ -48,13 +48,16 @@ export function canAccess(role: AppRole, allowed: AppRole[]) {
   return allowed.includes(role);
 }
 
+/** Internal Strategy page — must stay root-relative (`/…`). A leading `//` is protocol-relative and resolves to host `dashboard`. */
+export const DASHBOARD_STRATEGY_HREF = "/dashboard/strategy";
+
 export const DASHBOARD_NAV: NavItem[] = [
   { label: "Overview", href: "/dashboard", roles: ALL_ROLES },
   { label: "Appointments", href: "/dashboard/appointments", roles: ALL_ROLES },
   { label: "Clients", href: "/dashboard/clients", roles: ["stylist", "manager", "admin"] },
   { label: "Services", href: "/dashboard/services", roles: ["manager", "admin"] },
   { label: "Stylists", href: "/dashboard/stylists", roles: ["manager", "admin"] },
-  { label: "Strategy", href: "/dashboard/strategy", roles: ["admin"] },
+  { label: "Strategy", href: DASHBOARD_STRATEGY_HREF, roles: ["admin"] },
   { label: "Earnings", href: "/dashboard/earnings", roles: ["stylist", "manager", "admin"] },
   { label: "Goals", href: "/dashboard/goals", roles: ["stylist", "manager", "admin"] },
   { label: "Rewards", href: "/dashboard/rewards", roles: ["stylist", "manager", "admin"] },
