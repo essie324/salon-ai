@@ -14,10 +14,21 @@ import { formatLocalISO, startOfLocalDay } from "@/app/lib/retention";
 import { getGapFillSuggestionsForDate, type GapFillSuggestion } from "@/app/lib/scheduling/optimizer";
 import { addCalendarDays } from "@/app/lib/calendar/schedulerData";
 import {
+  collectOutreachKeysFromQueue,
+  mergeOutreachActionsIntoQueue,
+  partitionOutreachQueueByFollowUp,
+  type OutreachActionRow,
+  type OutreachQueueBuckets,
+} from "@/app/lib/outreach/followUp";
+import {
   buildOutreachQueue,
-  type OutreachQueueResult,
   type ReminderAppointmentRow,
 } from "@/app/lib/outreach/queue";
+import {
+  buildTodaysActionCenter,
+  type ActionCenterItem,
+  type ActionCenterReminderRow,
+} from "@/app/lib/actionCenter/today";
 
 type MoneySummary = {
   revenueCents: number;
@@ -152,7 +163,12 @@ export type DashboardSummary = {
   };
 
   /** Daily outreach actions (reminders + rebooking nudges); display-only — no automations. */
-  outreachQueue: OutreachQueueResult;
+  outreachQueue: OutreachQueueBuckets;
+
+  /** Prioritized owner-facing actions (gaps, outreach, reminders). */
+  actionCenter: {
+    items: ActionCenterItem[];
+  };
 };
 
 function nameFromParts(first?: string | null, last?: string | null) {
@@ -604,7 +620,7 @@ export async function getDashboardSummary(
     )
     .sort((a, b) => a.recommendedDate.getTime() - b.recommendedDate.getTime());
 
-  const outreachQueue = buildOutreachQueue({
+  const baseOutreachQueue = buildOutreachQueue({
     now,
     reminderAppointments: (upcomingReminderAppointments ?? []) as ReminderAppointmentRow[],
     dueSoon: dueSoon.slice(0, 20).map((r) => ({
@@ -640,6 +656,23 @@ export async function getDashboardSummary(
     serviceNameById: new Map((services ?? []).map((s) => [s.id, s.name ?? "Unnamed Service"])),
   });
 
+  const outreachKeys = collectOutreachKeysFromQueue(baseOutreachQueue);
+  let outreachActionRows: OutreachActionRow[] = [];
+  if (outreachKeys.length > 0) {
+    const { data: oaRows, error: oaErr } = await supabase
+      .from("outreach_actions")
+      .select(
+        "id, outreach_key, outreach_type, client_id, appointment_id, action_state, scheduled_for, created_at, updated_at",
+      )
+      .in("outreach_key", outreachKeys);
+    if (!oaErr && oaRows) {
+      outreachActionRows = oaRows as OutreachActionRow[];
+    }
+  }
+
+  const mergedQueue = mergeOutreachActionsIntoQueue(baseOutreachQueue, outreachActionRows);
+  const outreachQueue = partitionOutreachQueueByFollowUp(mergedQueue, now);
+
   const clientIntelligenceAtRisk = atRiskClientsAll
     .slice()
     .sort((a, b) => {
@@ -672,16 +705,67 @@ export async function getDashboardSummary(
       totalVisits: c.totalVisits,
     }));
 
-  const gapFillSuggestions = await getGapFillSuggestionsForDate({
-    supabase,
-    dateISO: todayISO,
-    minGapMinutes: 30,
-    retentionClients: opportunities.slice(0, 30).map((r) => ({
-      id: r.id,
-      name: r.name,
-      lastServiceName: r.lastServiceName,
-      status: r.status,
-    })),
+  const tomorrowISO = addCalendarDays(todayISO, 1);
+  const retentionPoolForGaps = opportunities.slice(0, 30).map((r) => ({
+    id: r.id,
+    name: r.name,
+    lastServiceName: r.lastServiceName,
+    status: r.status,
+  }));
+
+  const [
+    gapFillSuggestions,
+    gapFillTomorrowSuggestions,
+    actionCenterReminderRes,
+  ] = await Promise.all([
+    getGapFillSuggestionsForDate({
+      supabase,
+      dateISO: todayISO,
+      minGapMinutes: 30,
+      retentionClients: retentionPoolForGaps,
+    }),
+    getGapFillSuggestionsForDate({
+      supabase,
+      dateISO: tomorrowISO,
+      minGapMinutes: 30,
+      retentionClients: retentionPoolForGaps,
+    }),
+    supabase
+      .from("appointments")
+      .select("id, client_id, stylist_id, service_id, appointment_date, start_at, status")
+      .is("deleted_at", null)
+      .in("status", ["scheduled", "confirmed"])
+      .gte("appointment_date", todayISO)
+      .lte("appointment_date", tomorrowISO)
+      .order("appointment_date", { ascending: true })
+      .order("start_at", { ascending: true }),
+  ]);
+
+  const actionCenterReminderRows =
+    !actionCenterReminderRes.error && actionCenterReminderRes.data
+      ? actionCenterReminderRes.data
+      : [];
+
+  const clientNameByIdForAction = new Map(
+    (clients ?? []).map((c) => [c.id, nameFromParts(c.first_name, c.last_name)]),
+  );
+  const stylistNameByIdForAction = new Map(
+    (stylists ?? []).map((s) => [s.id, nameFromParts(s.first_name, s.last_name)]),
+  );
+  const serviceNameByIdForAction = new Map(
+    (services ?? []).map((s) => [s.id, s.name ?? "Unnamed Service"]),
+  );
+
+  const actionCenter = buildTodaysActionCenter({
+    todayISO,
+    tomorrowISO,
+    gapFillToday: gapFillSuggestions,
+    gapFillTomorrow: gapFillTomorrowSuggestions,
+    outreachQueue,
+    reminderAppointments: actionCenterReminderRows as ActionCenterReminderRow[],
+    clientNameById: clientNameByIdForAction,
+    stylistNameById: stylistNameByIdForAction,
+    serviceNameById: serviceNameByIdForAction,
   });
 
   return {
@@ -761,5 +845,6 @@ export async function getDashboardSummary(
       suggestions: gapFillSuggestions,
     },
     outreachQueue,
+    actionCenter,
   };
 }

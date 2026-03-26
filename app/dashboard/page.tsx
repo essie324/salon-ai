@@ -13,7 +13,13 @@ import {
   NO_SHOW_DEPOSIT_THRESHOLD,
   NO_SHOW_RESTRICT_THRESHOLD,
 } from "@/app/lib/bookingRules";
-import type { OutreachQueueResult } from "@/app/lib/outreach/queue";
+import { ActionCenterSection } from "@/app/components/dashboard/ActionCenterSection";
+import { OutreachFollowUpControls } from "@/app/components/outreach/OutreachFollowUpControls";
+import {
+  isOutreachQueueBucketsEmpty,
+  type OutreachQueueBuckets,
+} from "@/app/lib/outreach/followUp";
+import type { OutreachQueueGroup, OutreachQueueItem } from "@/app/lib/outreach/queue";
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient();
@@ -109,6 +115,8 @@ export default async function DashboardPage() {
           Your operating center for clients, bookings, services, and stylists.
         </p>
       </div>
+
+      <ActionCenterSection items={summary.actionCenter.items} />
 
       <div
         style={{
@@ -683,8 +691,8 @@ export default async function DashboardPage() {
   );
 }
 
-function OutreachQueueSection({ queue }: { queue: OutreachQueueResult }) {
-  if (queue.isEmpty) {
+function OutreachQueueSection({ queue }: { queue: OutreachQueueBuckets }) {
+  if (isOutreachQueueBucketsEmpty(queue)) {
     return (
       <section style={outreachSectionStyle}>
         <h2 style={outreachTitleStyle}>Outreach Queue</h2>
@@ -693,7 +701,8 @@ function OutreachQueueSection({ queue }: { queue: OutreachQueueResult }) {
         </p>
         <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
           Reminders cover the next two calendar days; rebooking rows use the same engine as the rest of the
-          dashboard (no SMS/email automation here).
+          dashboard (no SMS/email automation here). You can schedule follow-ups for later without sending
+          messages automatically.
         </p>
       </section>
     );
@@ -703,81 +712,149 @@ function OutreachQueueSection({ queue }: { queue: OutreachQueueResult }) {
     <section style={outreachSectionStyle}>
       <h2 style={outreachTitleStyle}>Outreach Queue</h2>
       <p style={outreachSubtitleStyle}>
-        Who to contact today: appointment reminders, due-soon rebooks, and overdue follow-ups. Staff actions
-        only — this list does not send messages.
+        Who to contact: appointment reminders, due-soon rebooks, and overdue follow-ups. Staff actions only —
+        this list does not send messages. Schedule a row for a later date to organize reminder work; when
+        that date arrives, it appears under &quot;Needs action now&quot; again.
       </p>
 
-      <div style={{ display: "grid", gap: 22 }}>
-        {queue.groups.map((g) => (
-          <div key={g.groupId}>
-            <h3 style={outreachGroupTitleStyle}>{g.title}</h3>
-            {g.subtitle ? <p style={outreachGroupSubtitleStyle}>{g.subtitle}</p> : null}
-            {g.items.length === 0 ? (
-              <p style={outreachEmptyStyle}>No items in this group.</p>
-            ) : (
-              <ul style={outreachListStyle}>
-                {g.items.map((item) => {
-                  const duplicateView =
-                    item.primaryActionHref === item.viewClientHref &&
-                    item.primaryActionLabel === "View Client";
-                  return (
-                    <li key={item.key} style={outreachRowStyle}>
-                      <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-                        <div style={outreachNameRowStyle}>
-                          <span style={outreachClientNameStyle}>{item.clientName}</span>
-                          <span style={outreachBadgeStyle(outreachTypeBadge(item.type))}>
-                            {outreachTypeLabel(item.type)}
-                          </span>
-                          {item.bookingRestricted ? (
-                            <span style={outreachBadgeStyle("restricted")}>Restricted</span>
-                          ) : null}
-                        </div>
-                        <p style={outreachContextStyle}>{item.dateContext}</p>
-                        <p style={outreachActionStyle}>{item.recommendedAction}</p>
-                        <div style={outreachPreviewWrapStyle}>
-                          <p style={outreachPreviewMetaStyle}>
-                            <span style={{ fontWeight: 700 }}>{item.template.internalLabel}</span>
-                            <span style={{ color: "#94a3b8" }}> · {item.template.shortActionLabel}</span>
-                          </p>
-                          <p style={outreachPreviewTextStyle}>{item.template.previewText}</p>
-                        </div>
-                      </div>
-                      <div style={outreachCtaRowStyle}>
-                        {duplicateView ? (
-                          <>
-                            <Link href={item.viewClientHref} style={outreachPrimaryLinkStyle}>
-                              View Client
-                            </Link>
-                            <CopyMessageButton message={item.template.previewText} />
-                          </>
-                        ) : (
-                          <>
-                            <Link href={item.viewClientHref} style={outreachSecondaryLinkStyle}>
-                              View Client
-                            </Link>
-                            <Link href={item.primaryActionHref} style={outreachPrimaryLinkStyle}>
-                              {item.primaryActionLabel}
-                            </Link>
-                            {item.bookAppointmentHref ? (
-                              <Link href={item.bookAppointmentHref} style={outreachSecondaryLinkStyle}>
-                                Book Appointment
-                              </Link>
-                            ) : null}
-                            <CopyMessageButton message={item.template.previewText} />
-                          </>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+      {queue.needsAction.isEmpty ? (
+        <p style={{ margin: "0 0 18px 0", fontSize: 13, color: "#64748b" }}>
+          Nothing needs immediate action right now{queue.scheduledFollowUp.isEmpty ? "" : " — see scheduled follow-ups below"}.
+        </p>
+      ) : (
+        <>
+          <h3 style={outreachBucketHeadingStyle}>Needs action now</h3>
+          <p style={outreachBucketSubStyle}>
+            Due today, past-due follow-ups, and anything not snoozed to a future date.
+          </p>
+          <div style={{ display: "grid", gap: 22 }}>
+            {queue.needsAction.groups.map((g) => (
+              <OutreachQueueGroupBlock key={g.groupId} group={g} followUpMode="active" />
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
+
+      {!queue.scheduledFollowUp.isEmpty ? (
+        <div style={{ marginTop: queue.needsAction.isEmpty ? 0 : 28 }}>
+          <h3 style={outreachBucketHeadingStyle}>Scheduled follow-up</h3>
+          <p style={outreachBucketSubStyle}>
+            Snoozed to a future date — still the same outreach type and message preview as when you scheduled
+            it.
+          </p>
+          <div style={{ display: "grid", gap: 22 }}>
+            {queue.scheduledFollowUp.groups.map((g) => (
+              <OutreachQueueGroupBlock key={`${g.groupId}-sched`} group={g} followUpMode="scheduled" />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
+
+function OutreachQueueGroupBlock({
+  group: g,
+  followUpMode,
+}: {
+  group: OutreachQueueGroup;
+  followUpMode: "active" | "scheduled";
+}) {
+  return (
+    <div>
+      <h3 style={outreachGroupTitleStyle}>{g.title}</h3>
+      {g.subtitle ? <p style={outreachGroupSubtitleStyle}>{g.subtitle}</p> : null}
+      {g.items.length === 0 ? (
+        <p style={outreachEmptyStyle}>No items in this group.</p>
+      ) : (
+        <ul style={outreachListStyle}>
+          {g.items.map((item) => (
+            <OutreachQueueRow key={item.key} item={item} followUpMode={followUpMode} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function OutreachQueueRow({
+  item,
+  followUpMode,
+}: {
+  item: OutreachQueueItem;
+  followUpMode: "active" | "scheduled";
+}) {
+  const duplicateView =
+    item.primaryActionHref === item.viewClientHref && item.primaryActionLabel === "View Client";
+  return (
+    <li style={outreachRowStyle}>
+      <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+        <div style={outreachNameRowStyle}>
+          <span style={outreachClientNameStyle}>{item.clientName}</span>
+          <span style={outreachBadgeStyle(outreachTypeBadge(item.type))}>{outreachTypeLabel(item.type)}</span>
+          {item.bookingRestricted ? <span style={outreachBadgeStyle("restricted")}>Restricted</span> : null}
+        </div>
+        <p style={outreachContextStyle}>{item.dateContext}</p>
+        <p style={outreachActionStyle}>{item.recommendedAction}</p>
+        <div style={outreachPreviewWrapStyle}>
+          <p style={outreachPreviewMetaStyle}>
+            <span style={{ fontWeight: 700 }}>{item.template.internalLabel}</span>
+            <span style={{ color: "#94a3b8" }}> · {item.template.shortActionLabel}</span>
+          </p>
+          <p style={outreachPreviewTextStyle}>{item.template.previewText}</p>
+        </div>
+        <OutreachFollowUpControls
+          outreachKey={item.key}
+          outreachType={item.type}
+          clientId={item.clientId}
+          appointmentId={item.appointmentId ?? null}
+          mode={followUpMode}
+          scheduledForIso={item.followUp?.scheduledFor ?? null}
+        />
+      </div>
+      <div style={outreachCtaRowStyle}>
+        {duplicateView ? (
+          <>
+            <Link href={item.viewClientHref} style={outreachPrimaryLinkStyle}>
+              View Client
+            </Link>
+            <CopyMessageButton message={item.template.previewText} />
+          </>
+        ) : (
+          <>
+            <Link href={item.viewClientHref} style={outreachSecondaryLinkStyle}>
+              View Client
+            </Link>
+            <Link href={item.primaryActionHref} style={outreachPrimaryLinkStyle}>
+              {item.primaryActionLabel}
+            </Link>
+            {item.bookAppointmentHref ? (
+              <Link href={item.bookAppointmentHref} style={outreachSecondaryLinkStyle}>
+                Book Appointment
+              </Link>
+            ) : null}
+            <CopyMessageButton message={item.template.previewText} />
+          </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+const outreachBucketHeadingStyle: CSSProperties = {
+  margin: "0 0 6px 0",
+  fontSize: 15,
+  fontWeight: 800,
+  color: "#0f172a",
+};
+
+const outreachBucketSubStyle: CSSProperties = {
+  margin: "0 0 14px 0",
+  fontSize: 12,
+  color: "#64748b",
+  lineHeight: 1.45,
+  maxWidth: 720,
+};
 
 function outreachTypeLabel(type: string): string {
   if (type === "appointment_reminder") return "Reminder";

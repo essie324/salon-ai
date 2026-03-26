@@ -20,6 +20,7 @@ import {
   shouldShowDepositRequiredWarning,
 } from "@/app/lib/bookingRules";
 import { CopyMessageButton } from "@/app/components/outreach/CopyMessageButton";
+import { formatScheduledForLabel } from "@/app/lib/outreach/followUp";
 import { rebookingOutreachTemplateForStatus } from "@/app/lib/outreach/templates";
 
 type Client = {
@@ -66,6 +67,13 @@ type Stylist = {
   last_name: string | null;
 };
 
+function clientScheduledOutreachTypeLabel(t: string): string {
+  if (t === "appointment_reminder") return "Appointment reminder";
+  if (t === "due_soon_rebooking") return "Due soon rebook";
+  if (t === "overdue_outreach") return "Overdue outreach";
+  return t;
+}
+
 function formatDate(startIso: string) {
   const d = new Date(startIso);
   return d.toLocaleDateString("en-US", {
@@ -109,6 +117,7 @@ export default async function DashboardClientDetailPage({
     { data: stylists },
     { data: memories },
     intakeRes,
+    outreachRes,
   ] = await Promise.all([
     supabase
       .from("clients")
@@ -143,6 +152,14 @@ export default async function DashboardClientDetailPage({
           .order("created_at", { ascending: false })
           .limit(3)
       : Promise.resolve({ data: [] as unknown[], error: null }),
+    supabase
+      .from("outreach_actions")
+      .select("outreach_key, outreach_type, scheduled_for, action_state")
+      .eq("client_id", id)
+      .eq("action_state", "scheduled")
+      .not("scheduled_for", "is", null)
+      .gte("scheduled_for", new Date().toISOString())
+      .order("scheduled_for", { ascending: true }),
   ]);
 
   if (clientError) {
@@ -177,6 +194,15 @@ export default async function DashboardClientDetailPage({
   const serviceList = (services ?? []) as Service[];
   const stylistList = (stylists ?? []) as Stylist[];
   const memoryList = (memories ?? []) as unknown as AppointmentMemory[];
+  const scheduledOutreachForClient =
+    !outreachRes.error && outreachRes.data
+      ? (outreachRes.data as {
+          outreach_key: string;
+          outreach_type: string;
+          scheduled_for: string;
+        }[])
+      : [];
+
   const intakeList = (intakeRes.data ?? []) as {
     id: string;
     source: string | null;
@@ -629,6 +655,32 @@ export default async function DashboardClientDetailPage({
               </>
             )}
           </div>
+
+          {scheduledOutreachForClient.length > 0 ? (
+            <div
+              style={{
+                marginTop: 16,
+                padding: 14,
+                borderRadius: 12,
+                background: "#f0f9ff",
+                border: "1px solid #bae6fd",
+              }}
+            >
+              <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Scheduled outreach follow-ups</h3>
+              <p style={{ margin: "0 0 10px", fontSize: 12, color: "#0369a1", lineHeight: 1.45 }}>
+                From the dashboard outreach queue — reminders only; nothing is sent automatically.
+              </p>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "#0c4a6e" }}>
+                {scheduledOutreachForClient.map((row) => (
+                  <li key={row.outreach_key} style={{ marginBottom: 6 }}>
+                    <strong>{clientScheduledOutreachTypeLabel(row.outreach_type)}</strong>
+                    {" · "}
+                    {formatScheduledForLabel(row.scheduled_for)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           <div
             style={{

@@ -5,8 +5,15 @@ import {
   overdueOutreachTemplate,
   type OutreachTemplatePreview,
 } from "@/app/lib/outreach/templates";
-
 export type { OutreachTemplatePreview };
+
+/** Persisted in `outreach_actions.action_state` */
+export type OutreachActionState =
+  | "new"
+  | "reviewed"
+  | "copied"
+  | "scheduled"
+  | "dismissed";
 
 export type OutreachQueueItemType =
   | "appointment_reminder"
@@ -36,6 +43,14 @@ export type OutreachQueueItem = {
   bookAppointmentHref?: string;
   /** Reusable SMS-style preview — display only; not sent automatically */
   template: OutreachTemplatePreview;
+  /** Set for appointment reminders — matches `outreach_actions.appointment_id` when stored */
+  appointmentId?: string | null;
+  /** Optional DB-backed follow-up state (merged in dashboard summary) */
+  followUp?: {
+    outreachKey: string;
+    actionState: OutreachActionState;
+    scheduledFor: string | null;
+  } | null;
 };
 
 export type OutreachQueueGroup = {
@@ -172,6 +187,7 @@ export function buildOutreachQueue(input: BuildOutreachQueueInput): OutreachQueu
       return {
         type: "appointment_reminder" as const,
         key: `ar-${row.id}`,
+        appointmentId: row.id,
         clientId: clientId || "unknown",
         clientName,
         stylistId: row.stylist_id,
