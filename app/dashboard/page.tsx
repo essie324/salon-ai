@@ -1,4 +1,6 @@
 import Link from "next/link";
+import type { CSSProperties } from "react";
+import { CopyMessageButton } from "@/app/components/outreach/CopyMessageButton";
 import { createSupabaseServerClient } from "@/app/lib/supabaseServer";
 import { getDashboardSummary } from "@/app/lib/dashboard/getDashboardSummary";
 import { computeRevenueInsights, type AppointmentRevenueRow } from "@/app/lib/revenue/metrics";
@@ -11,7 +13,7 @@ import {
   NO_SHOW_DEPOSIT_THRESHOLD,
   NO_SHOW_RESTRICT_THRESHOLD,
 } from "@/app/lib/bookingRules";
-import { OutreachQueueSection } from "./_components/OutreachQueueSection";
+import type { OutreachQueueResult } from "@/app/lib/outreach/queue";
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient();
@@ -681,7 +683,286 @@ export default async function DashboardPage() {
   );
 }
 
-const statCardStyle: React.CSSProperties = {
+function OutreachQueueSection({ queue }: { queue: OutreachQueueResult }) {
+  if (queue.isEmpty) {
+    return (
+      <section style={outreachSectionStyle}>
+        <h2 style={outreachTitleStyle}>Outreach Queue</h2>
+        <p style={outreachSubtitleStyle}>
+          Daily actions from upcoming visits and retention signals. Nothing queued right now.
+        </p>
+        <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
+          Reminders cover the next two calendar days; rebooking rows use the same engine as the rest of the
+          dashboard (no SMS/email automation here).
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section style={outreachSectionStyle}>
+      <h2 style={outreachTitleStyle}>Outreach Queue</h2>
+      <p style={outreachSubtitleStyle}>
+        Who to contact today: appointment reminders, due-soon rebooks, and overdue follow-ups. Staff actions
+        only — this list does not send messages.
+      </p>
+
+      <div style={{ display: "grid", gap: 22 }}>
+        {queue.groups.map((g) => (
+          <div key={g.groupId}>
+            <h3 style={outreachGroupTitleStyle}>{g.title}</h3>
+            {g.subtitle ? <p style={outreachGroupSubtitleStyle}>{g.subtitle}</p> : null}
+            {g.items.length === 0 ? (
+              <p style={outreachEmptyStyle}>No items in this group.</p>
+            ) : (
+              <ul style={outreachListStyle}>
+                {g.items.map((item) => {
+                  const duplicateView =
+                    item.primaryActionHref === item.viewClientHref &&
+                    item.primaryActionLabel === "View Client";
+                  return (
+                    <li key={item.key} style={outreachRowStyle}>
+                      <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                        <div style={outreachNameRowStyle}>
+                          <span style={outreachClientNameStyle}>{item.clientName}</span>
+                          <span style={outreachBadgeStyle(outreachTypeBadge(item.type))}>
+                            {outreachTypeLabel(item.type)}
+                          </span>
+                          {item.bookingRestricted ? (
+                            <span style={outreachBadgeStyle("restricted")}>Restricted</span>
+                          ) : null}
+                        </div>
+                        <p style={outreachContextStyle}>{item.dateContext}</p>
+                        <p style={outreachActionStyle}>{item.recommendedAction}</p>
+                        <div style={outreachPreviewWrapStyle}>
+                          <p style={outreachPreviewMetaStyle}>
+                            <span style={{ fontWeight: 700 }}>{item.template.internalLabel}</span>
+                            <span style={{ color: "#94a3b8" }}> · {item.template.shortActionLabel}</span>
+                          </p>
+                          <p style={outreachPreviewTextStyle}>{item.template.previewText}</p>
+                        </div>
+                      </div>
+                      <div style={outreachCtaRowStyle}>
+                        {duplicateView ? (
+                          <>
+                            <Link href={item.viewClientHref} style={outreachPrimaryLinkStyle}>
+                              View Client
+                            </Link>
+                            <CopyMessageButton message={item.template.previewText} />
+                          </>
+                        ) : (
+                          <>
+                            <Link href={item.viewClientHref} style={outreachSecondaryLinkStyle}>
+                              View Client
+                            </Link>
+                            <Link href={item.primaryActionHref} style={outreachPrimaryLinkStyle}>
+                              {item.primaryActionLabel}
+                            </Link>
+                            {item.bookAppointmentHref ? (
+                              <Link href={item.bookAppointmentHref} style={outreachSecondaryLinkStyle}>
+                                Book Appointment
+                              </Link>
+                            ) : null}
+                            <CopyMessageButton message={item.template.previewText} />
+                          </>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function outreachTypeLabel(type: string): string {
+  if (type === "appointment_reminder") return "Reminder";
+  if (type === "due_soon_rebooking") return "Due soon";
+  return "Overdue";
+}
+
+function outreachTypeBadge(type: string): "muted" | "amber" | "rose" {
+  if (type === "appointment_reminder") return "muted";
+  if (type === "due_soon_rebooking") return "amber";
+  return "rose";
+}
+
+function outreachBadgeStyle(t: "muted" | "amber" | "rose" | "restricted"): CSSProperties {
+  const base: CSSProperties = {
+    fontSize: 10,
+    fontWeight: 800,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    padding: "3px 8px",
+    borderRadius: 999,
+    whiteSpace: "nowrap",
+  };
+  if (t === "amber") {
+    return { ...base, background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" };
+  }
+  if (t === "rose") {
+    return { ...base, background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca" };
+  }
+  if (t === "restricted") {
+    return { ...base, background: "#fff7ed", color: "#9a3412", border: "1px solid #fed7aa" };
+  }
+  return { ...base, background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" };
+}
+
+const outreachSectionStyle: CSSProperties = {
+  gridColumn: "1 / -1",
+  padding: 22,
+  borderRadius: 16,
+  border: "1px solid #e2e8f0",
+  background: "linear-gradient(180deg, #fafafa 0%, #ffffff 100%)",
+  boxShadow: "0 2px 12px rgba(15, 23, 42, 0.06)",
+};
+
+const outreachTitleStyle: CSSProperties = {
+  margin: "0 0 8px 0",
+  fontSize: "1.35rem",
+  fontWeight: 800,
+  color: "#0f172a",
+};
+
+const outreachSubtitleStyle: CSSProperties = {
+  margin: "0 0 18px 0",
+  fontSize: 14,
+  color: "#475569",
+  lineHeight: 1.5,
+  maxWidth: 720,
+};
+
+const outreachGroupTitleStyle: CSSProperties = {
+  margin: "0 0 6px 0",
+  fontSize: 13,
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  color: "#64748b",
+};
+
+const outreachGroupSubtitleStyle: CSSProperties = {
+  margin: "0 0 12px 0",
+  fontSize: 12,
+  color: "#94a3b8",
+  lineHeight: 1.45,
+  maxWidth: 640,
+};
+
+const outreachListStyle: CSSProperties = {
+  listStyle: "none",
+  padding: 0,
+  margin: 0,
+  display: "grid",
+  gap: 0,
+};
+
+const outreachRowStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "space-between",
+  gap: 14,
+  alignItems: "flex-start",
+  padding: "14px 0",
+  borderBottom: "1px solid #f1f5f9",
+};
+
+const outreachNameRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const outreachClientNameStyle: CSSProperties = {
+  fontWeight: 800,
+  fontSize: 15,
+  color: "#0f172a",
+};
+
+const outreachContextStyle: CSSProperties = {
+  margin: "6px 0 0 0",
+  fontSize: 13,
+  color: "#334155",
+  lineHeight: 1.45,
+};
+
+const outreachActionStyle: CSSProperties = {
+  margin: "4px 0 0 0",
+  fontSize: 12,
+  color: "#64748b",
+  lineHeight: 1.4,
+};
+
+const outreachPreviewWrapStyle: CSSProperties = {
+  marginTop: 10,
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  borderLeft: "3px solid #cbd5e1",
+};
+
+const outreachPreviewMetaStyle: CSSProperties = {
+  margin: "0 0 6px 0",
+  fontSize: 11,
+  color: "#64748b",
+  textTransform: "none",
+  letterSpacing: "0.02em",
+};
+
+const outreachPreviewTextStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  color: "#334155",
+  lineHeight: 1.5,
+  fontStyle: "italic",
+};
+
+const outreachCtaRowStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  alignItems: "center",
+};
+
+const outreachSecondaryLinkStyle: CSSProperties = {
+  textDecoration: "none",
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid #cbd5e1",
+  background: "#fff",
+  color: "#0f172a",
+  fontWeight: 700,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+};
+
+const outreachPrimaryLinkStyle: CSSProperties = {
+  textDecoration: "none",
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid #0f172a",
+  background: "#0f172a",
+  color: "#fff",
+  fontWeight: 800,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+};
+
+const outreachEmptyStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  color: "#94a3b8",
+  fontStyle: "italic",
+};
+
+const statCardStyle: CSSProperties = {
   background: "#fff",
   border: "1px solid #e5e5e5",
   borderRadius: 18,
@@ -689,24 +970,24 @@ const statCardStyle: React.CSSProperties = {
   boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
 };
 
-const statLabelStyle: React.CSSProperties = {
+const statLabelStyle: CSSProperties = {
   color: "#666",
   fontWeight: 700,
   marginBottom: 10,
 };
 
-const statNumberStyle: React.CSSProperties = {
+const statNumberStyle: CSSProperties = {
   fontSize: "2rem",
   fontWeight: 800,
   color: "#111",
 };
 
-const cardLinkStyle: React.CSSProperties = {
+const cardLinkStyle: CSSProperties = {
   textDecoration: "none",
   color: "inherit",
 };
 
-const featureCardStyle: React.CSSProperties = {
+const featureCardStyle: CSSProperties = {
   background: "#fff",
   border: "1px solid #e5e5e5",
   borderRadius: 18,
@@ -715,12 +996,12 @@ const featureCardStyle: React.CSSProperties = {
   height: "100%",
 };
 
-const cardTitleStyle: React.CSSProperties = {
+const cardTitleStyle: CSSProperties = {
   margin: "0 0 10px 0",
   fontSize: "1.2rem",
 };
 
-const cardTextStyle: React.CSSProperties = {
+const cardTextStyle: CSSProperties = {
   margin: 0,
   color: "#555",
   lineHeight: 1.5,

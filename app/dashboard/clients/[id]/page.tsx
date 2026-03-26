@@ -19,6 +19,7 @@ import {
   shouldBlockSelfServeBooking,
   shouldShowDepositRequiredWarning,
 } from "@/app/lib/bookingRules";
+import { CopyMessageButton } from "@/app/components/outreach/CopyMessageButton";
 import { rebookingOutreachTemplateForStatus } from "@/app/lib/outreach/templates";
 
 type Client = {
@@ -608,6 +609,9 @@ export default async function DashboardClientDetailPage({
                         >
                           {suggestedOutreachMessage.previewText}
                         </p>
+                        <div style={{ marginTop: 10 }}>
+                          <CopyMessageButton message={suggestedOutreachMessage.previewText} />
+                        </div>
                       </div>
                     ) : null}
                   </div>
