@@ -172,8 +172,26 @@ export function buildTodaysActionCenter(input: BuildTodaysActionCenterInput): { 
   }
 
   const needsItems = flattenQueueItems(outreachQueue, "needs");
+
+  for (const item of needsItems) {
+    if (item.followUp?.actionState !== "ready_to_send") continue;
+    items.push({
+      id: `outreach-ready-${item.key}`,
+      category: "outreach",
+      type: "outreach",
+      priorityRank: 2.5,
+      sortKey: `r-${item.clientName}-${item.key}`,
+      clientName: item.clientName,
+      stylistName: item.stylistName,
+      timeContext: item.dateContext,
+      description: `Ready to send — ${item.recommendedAction}`,
+      ctas: outreachCtas(item),
+    });
+  }
+
   for (const item of needsItems) {
     if (item.type === "overdue_outreach") {
+      if (item.followUp?.actionState === "ready_to_send") continue;
       items.push({
         id: `outreach-${item.key}`,
         category: "outreach",
@@ -249,6 +267,7 @@ export function buildTodaysActionCenter(input: BuildTodaysActionCenterInput): { 
 
   for (const item of needsItems) {
     if (item.type !== "due_soon_rebooking") continue;
+    if (item.followUp?.actionState === "ready_to_send") continue;
     items.push({
       id: `outreach-${item.key}`,
       category: "outreach",

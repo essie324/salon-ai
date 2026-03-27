@@ -16,12 +16,15 @@ export type OutreachActionRow = {
   appointment_id: string | null;
   action_state: string;
   scheduled_for: string | null;
+  sent_at: string | null;
+  is_ready: boolean;
+  last_message_preview: string | null;
   created_at: string;
   updated_at: string;
 };
 
 export type OutreachQueueBuckets = {
-  /** Items to handle now (or past-due scheduled). Dismissed excluded. */
+  /** Items to handle now (or past-due scheduled). Dismissed and sent excluded. */
   needsAction: OutreachQueueResult;
   /** Future scheduled follow-ups only. */
   scheduledFollowUp: OutreachQueueResult;
@@ -37,6 +40,14 @@ export function collectOutreachKeysFromQueue(queue: OutreachQueueResult): string
 
 function isDismissed(item: OutreachQueueItem): boolean {
   return item.followUp?.actionState === "dismissed";
+}
+
+function isSent(item: OutreachQueueItem): boolean {
+  const fu = item.followUp;
+  if (!fu) return false;
+  if (fu.actionState === "sent") return true;
+  if (fu.sentAt) return true;
+  return false;
 }
 
 function isScheduledFuture(item: OutreachQueueItem, now: Date): boolean {
@@ -65,6 +76,31 @@ function queueResultFromGroups(groups: OutreachQueueGroup[]): OutreachQueueResul
   };
 }
 
+function compareNeedsPriority(a: OutreachQueueItem, b: OutreachQueueItem, now: Date): number {
+  const pa = needsActionSortRank(a, now);
+  const pb = needsActionSortRank(b, now);
+  if (pa !== pb) return pa - pb;
+  return a.clientName.localeCompare(b.clientName);
+}
+
+/** Lower = higher priority in the Needs action bucket. */
+function needsActionSortRank(item: OutreachQueueItem, now: Date): number {
+  if (item.followUp?.actionState === "ready_to_send") return 0;
+  const fu = item.followUp;
+  if (fu?.actionState === "scheduled" && fu.scheduledFor) {
+    if (new Date(fu.scheduledFor).getTime() <= now.getTime()) return 1;
+  }
+  return 2;
+}
+
+function sortNeedsActionQueue(queue: OutreachQueueResult, now: Date): OutreachQueueResult {
+  const groups = queue.groups.map((g) => ({
+    ...g,
+    items: [...g.items].sort((a, b) => compareNeedsPriority(a, b, now)),
+  }));
+  return queueResultFromGroups(groups);
+}
+
 /**
  * Attach DB rows to queue items by `outreach_key`. Items without a row behave like implicit `new`.
  */
@@ -84,6 +120,9 @@ export function mergeOutreachActionsIntoQueue(
         outreachKey: row.outreach_key,
         actionState: row.action_state as OutreachActionState,
         scheduledFor: row.scheduled_for,
+        sentAt: row.sent_at,
+        isReady: row.is_ready,
+        lastMessagePreview: row.last_message_preview,
       },
     };
   };
@@ -95,19 +134,23 @@ export function mergeOutreachActionsIntoQueue(
 }
 
 /**
- * Split merged queue into "act now" vs "scheduled later". Dismissed items are omitted from both.
+ * Split merged queue into "act now" vs "scheduled later".
+ * Dismissed and sent items are omitted from both buckets.
  */
 export function partitionOutreachQueueByFollowUp(
   queue: OutreachQueueResult,
   now: Date,
 ): OutreachQueueBuckets {
   const needsPredicate = (item: OutreachQueueItem) =>
-    !isDismissed(item) && !isScheduledFuture(item, now);
+    !isDismissed(item) && !isSent(item) && !isScheduledFuture(item, now);
   const scheduledPredicate = (item: OutreachQueueItem) =>
-    !isDismissed(item) && isScheduledFuture(item, now);
+    !isDismissed(item) && !isSent(item) && isScheduledFuture(item, now);
+
+  const needsRaw = queueResultFromGroups(filterGroups(queue.groups, needsPredicate));
+  const needsAction = sortNeedsActionQueue(needsRaw, now);
 
   return {
-    needsAction: queueResultFromGroups(filterGroups(queue.groups, needsPredicate)),
+    needsAction,
     scheduledFollowUp: queueResultFromGroups(filterGroups(queue.groups, scheduledPredicate)),
   };
 }

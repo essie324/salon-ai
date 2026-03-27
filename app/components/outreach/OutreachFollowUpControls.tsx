@@ -5,16 +5,19 @@ import { useMemo, type CSSProperties } from "react";
 import {
   clearOutreachSchedule,
   dismissOutreachFollowUp,
+  markOutreachReady,
   scheduleOutreachFollowUp,
+  sendOutreachNow,
 } from "@/app/dashboard/outreach-actions";
 import { formatScheduledForLabel } from "@/app/lib/outreach/followUp";
+import type { OutreachActionState } from "@/app/lib/outreach/queue";
 
 function SubmitButton({
   label,
   variant,
 }: {
   label: string;
-  variant: "primary" | "ghost" | "danger";
+  variant: "primary" | "ghost" | "danger" | "accent";
 }) {
   const { pending } = useFormStatus();
   const style =
@@ -22,7 +25,9 @@ function SubmitButton({
       ? outreachSchedulePrimaryBtnStyle
       : variant === "danger"
         ? outreachScheduleDangerBtnStyle
-        : outreachScheduleGhostBtnStyle;
+        : variant === "accent"
+          ? outreachScheduleAccentBtnStyle
+          : outreachScheduleGhostBtnStyle;
   return (
     <button type="submit" disabled={pending} style={style}>
       {pending ? "…" : label}
@@ -38,10 +43,22 @@ export type OutreachFollowUpControlsProps = {
   /** `active` = needs action now; `scheduled` = future follow-up bucket */
   mode: "active" | "scheduled";
   scheduledForIso?: string | null;
+  /** Current template preview — passed to send simulation as snapshot text */
+  messagePreview: string;
+  actionState?: OutreachActionState | null;
 };
 
 export function OutreachFollowUpControls(props: OutreachFollowUpControlsProps) {
-  const { outreachKey, outreachType, clientId, appointmentId, mode, scheduledForIso } = props;
+  const {
+    outreachKey,
+    outreachType,
+    clientId,
+    appointmentId,
+    mode,
+    scheduledForIso,
+    messagePreview,
+    actionState,
+  } = props;
 
   const minDate = useMemo(() => {
     const d = new Date();
@@ -57,8 +74,11 @@ export function OutreachFollowUpControls(props: OutreachFollowUpControlsProps) {
       <input type="hidden" name="outreachType" value={outreachType} />
       <input type="hidden" name="clientId" value={clientId} />
       {appointmentId ? <input type="hidden" name="appointmentId" value={appointmentId} /> : null}
+      <input type="hidden" name="messagePreview" value={messagePreview} />
     </>
   );
+
+  const isReady = actionState === "ready_to_send";
 
   if (mode === "scheduled") {
     return (
@@ -66,6 +86,14 @@ export function OutreachFollowUpControls(props: OutreachFollowUpControlsProps) {
         <span style={outreachScheduledPillStyle}>
           Follow-up: {formatScheduledForLabel(scheduledForIso ?? null)}
         </span>
+        <form action={markOutreachReady} style={inlineFormStyle}>
+          {hidden}
+          <SubmitButton label="Mark ready" variant="accent" />
+        </form>
+        <form action={sendOutreachNow} style={inlineFormStyle}>
+          {hidden}
+          <SubmitButton label="Send now" variant="primary" />
+        </form>
         <form action={clearOutreachSchedule} style={inlineFormStyle}>
           {hidden}
           <SubmitButton label="Back to queue" variant="ghost" />
@@ -78,34 +106,69 @@ export function OutreachFollowUpControls(props: OutreachFollowUpControlsProps) {
     );
   }
 
+  const scheduleForm = (
+    <form action={scheduleOutreachFollowUp} style={scheduleFormStyle}>
+      {hidden}
+      <label style={dateLabelStyle}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>Remind on</span>
+        <input
+          type="date"
+          name="scheduledDate"
+          min={minDate}
+          required
+          style={dateInputStyle}
+          aria-label="Schedule follow-up date"
+        />
+      </label>
+      <SubmitButton label="Schedule" variant="primary" />
+    </form>
+  );
+
+  const markReadyForm = (
+    <form action={markOutreachReady} style={inlineFormStyle}>
+      {hidden}
+      <SubmitButton label="Mark ready" variant="accent" />
+    </form>
+  );
+
+  const sendNowForm = (
+    <form action={sendOutreachNow} style={inlineFormStyle}>
+      {hidden}
+      <SubmitButton label="Send now" variant={isReady ? "primary" : "ghost"} />
+    </form>
+  );
+
+  const dismissForm = (
+    <form action={dismissOutreachFollowUp} style={inlineFormStyle}>
+      {hidden}
+      <SubmitButton label="Dismiss" variant="danger" />
+    </form>
+  );
+
   return (
     <div style={outreachFollowUpWrapStyle}>
-      <form action={scheduleOutreachFollowUp} style={scheduleFormStyle}>
-        {hidden}
-        <label style={dateLabelStyle}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>Remind on</span>
-          <input
-            type="date"
-            name="scheduledDate"
-            min={minDate}
-            required
-            style={dateInputStyle}
-            aria-label="Schedule follow-up date"
-          />
-        </label>
-        <SubmitButton label="Schedule for later" variant="primary" />
-      </form>
-      <form action={dismissOutreachFollowUp} style={inlineFormStyle}>
-        {hidden}
-        <SubmitButton label="Dismiss" variant="ghost" />
-      </form>
+      {isReady ? (
+        <>
+          <span style={outreachReadyPillStyle}>Ready to send</span>
+          {sendNowForm}
+          {scheduleForm}
+          {dismissForm}
+        </>
+      ) : (
+        <>
+          {scheduleForm}
+          {markReadyForm}
+          {sendNowForm}
+          {dismissForm}
+        </>
+      )}
     </div>
   );
 }
 
-const inlineFormStyle: React.CSSProperties = { display: "inline", margin: 0 };
+const inlineFormStyle: CSSProperties = { display: "inline", margin: 0 };
 
-const scheduleFormStyle: React.CSSProperties = {
+const scheduleFormStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   alignItems: "flex-end",
@@ -147,6 +210,18 @@ const outreachSchedulePrimaryBtnStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const outreachScheduleAccentBtnStyle: CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid #0284c7",
+  background: "#e0f2fe",
+  color: "#0369a1",
+  fontWeight: 700,
+  fontSize: 12,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
 const outreachScheduleGhostBtnStyle: CSSProperties = {
   padding: "8px 12px",
   borderRadius: 10,
@@ -177,6 +252,16 @@ const outreachScheduledPillStyle: CSSProperties = {
   color: "#0369a1",
   background: "#e0f2fe",
   border: "1px solid #bae6fd",
+  padding: "6px 10px",
+  borderRadius: 999,
+};
+
+const outreachReadyPillStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: "#0c4a6e",
+  background: "#bae6fd",
+  border: "1px solid #38bdf8",
   padding: "6px 10px",
   borderRadius: 999,
 };

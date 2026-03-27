@@ -663,7 +663,7 @@ export async function getDashboardSummary(
     const { data: oaRows, error: oaErr } = await supabase
       .from("outreach_actions")
       .select(
-        "id, outreach_key, outreach_type, client_id, appointment_id, action_state, scheduled_for, created_at, updated_at",
+        "id, outreach_key, outreach_type, client_id, appointment_id, action_state, scheduled_for, sent_at, is_ready, last_message_preview, created_at, updated_at",
       )
       .in("outreach_key", outreachKeys);
     if (!oaErr && oaRows) {

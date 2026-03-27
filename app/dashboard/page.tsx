@@ -815,8 +815,9 @@ function OutreachQueueRow({
 }) {
   const duplicateView =
     item.primaryActionHref === item.viewClientHref && item.primaryActionLabel === "View Client";
+  const readyHighlight = item.followUp?.actionState === "ready_to_send";
   return (
-    <li style={outreachRowStyle}>
+    <li style={readyHighlight ? { ...outreachRowStyle, ...outreachRowReadyStyle } : outreachRowStyle}>
       <div style={{ flex: "1 1 220px", minWidth: 0 }}>
         <div style={outreachNameRowStyle}>
           <span style={outreachClientNameStyle}>{item.clientName}</span>
@@ -839,6 +840,8 @@ function OutreachQueueRow({
           appointmentId={item.appointmentId ?? null}
           mode={followUpMode}
           scheduledForIso={item.followUp?.scheduledFor ?? null}
+          messagePreview={item.template.previewText}
+          actionState={item.followUp?.actionState ?? null}
         />
       </div>
       <div style={outreachCtaRowStyle}>
@@ -966,6 +969,13 @@ const outreachListStyle: CSSProperties = {
   margin: 0,
   display: "grid",
   gap: 0,
+};
+
+const outreachRowReadyStyle: CSSProperties = {
+  borderLeft: "4px solid #0ea5e9",
+  paddingLeft: 12,
+  marginLeft: 0,
+  background: "linear-gradient(90deg, #f0f9ff 0%, #ffffff 12%)",
 };
 
 const outreachRowStyle: CSSProperties = {

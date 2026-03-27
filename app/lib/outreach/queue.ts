@@ -13,7 +13,9 @@ export type OutreachActionState =
   | "reviewed"
   | "copied"
   | "scheduled"
-  | "dismissed";
+  | "dismissed"
+  | "ready_to_send"
+  | "sent";
 
 export type OutreachQueueItemType =
   | "appointment_reminder"
@@ -50,6 +52,9 @@ export type OutreachQueueItem = {
     outreachKey: string;
     actionState: OutreachActionState;
     scheduledFor: string | null;
+    sentAt?: string | null;
+    isReady?: boolean;
+    lastMessagePreview?: string | null;
   } | null;
 };
 

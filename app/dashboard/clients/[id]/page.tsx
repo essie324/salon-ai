@@ -74,6 +74,34 @@ function clientScheduledOutreachTypeLabel(t: string): string {
   return t;
 }
 
+function clientOutreachStatusLine(
+  row: {
+    action_state: string;
+    sent_at: string | null;
+    scheduled_for: string | null;
+    outreach_type: string;
+  } | null,
+): string {
+  if (!row) return "No outreach logged yet";
+  const type = clientScheduledOutreachTypeLabel(row.outreach_type);
+  if (row.action_state === "sent" || row.sent_at) {
+    return `Sent (simulated) · ${type}`;
+  }
+  if (row.action_state === "ready_to_send") {
+    return `Ready to send · ${type}`;
+  }
+  if (row.action_state === "scheduled" && row.scheduled_for) {
+    return `Scheduled · ${type} · ${formatScheduledForLabel(row.scheduled_for)}`;
+  }
+  if (row.action_state === "dismissed") {
+    return `Dismissed · ${type}`;
+  }
+  if (row.action_state === "new") {
+    return `New · ${type}`;
+  }
+  return `${row.action_state} · ${type}`;
+}
+
 function formatDate(startIso: string) {
   const d = new Date(startIso);
   return d.toLocaleDateString("en-US", {
@@ -118,6 +146,7 @@ export default async function DashboardClientDetailPage({
     { data: memories },
     intakeRes,
     outreachRes,
+    latestOutreachRes,
   ] = await Promise.all([
     supabase
       .from("clients")
@@ -160,6 +189,14 @@ export default async function DashboardClientDetailPage({
       .not("scheduled_for", "is", null)
       .gte("scheduled_for", new Date().toISOString())
       .order("scheduled_for", { ascending: true }),
+    supabase
+      .from("outreach_actions")
+      .select(
+        "action_state, sent_at, is_ready, last_message_preview, outreach_type, updated_at, scheduled_for",
+      )
+      .eq("client_id", id)
+      .order("updated_at", { ascending: false })
+      .limit(1),
   ]);
 
   if (clientError) {
@@ -202,6 +239,19 @@ export default async function DashboardClientDetailPage({
           scheduled_for: string;
         }[])
       : [];
+
+  const latestOutreachRow =
+    !latestOutreachRes.error && latestOutreachRes.data?.[0]
+      ? (latestOutreachRes.data[0] as {
+          action_state: string;
+          sent_at: string | null;
+          is_ready: boolean;
+          last_message_preview: string | null;
+          outreach_type: string;
+          updated_at: string;
+          scheduled_for: string | null;
+        })
+      : null;
 
   const intakeList = (intakeRes.data ?? []) as {
     id: string;
@@ -366,6 +416,10 @@ export default async function DashboardClientDetailPage({
           },
         )
       : null;
+
+  const outreachStatusLabel = clientOutreachStatusLine(latestOutreachRow);
+  const outreachPreviewForProfile =
+    latestOutreachRow?.last_message_preview?.trim() || suggestedOutreachMessage?.previewText || null;
 
   const rebookingCardAccent =
     rebooking.rebooking_status === "overdue"
@@ -653,6 +707,38 @@ export default async function DashboardClientDetailPage({
                   </div>
                 ) : null}
               </>
+            )}
+          </div>
+
+          <div
+            style={{
+              marginTop: 16,
+              padding: 14,
+              borderRadius: 12,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Outreach status</h3>
+            <p style={{ margin: "0 0 6px", fontSize: 13, fontWeight: 800, color: "#0f172a" }}>
+              {outreachStatusLabel}
+            </p>
+            {outreachPreviewForProfile ? (
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 13,
+                  color: "#334155",
+                  lineHeight: 1.5,
+                  fontStyle: "italic",
+                }}
+              >
+                {outreachPreviewForProfile}
+              </p>
+            ) : (
+              <p style={{ margin: 0, fontSize: 12, color: "#94a3b8" }}>
+                No message preview on file yet — use the dashboard outreach queue to copy or simulate send.
+              </p>
             )}
           </div>
 
